@@ -19,7 +19,7 @@ def home(request):
 
     template = loader.get_template('checklist/index.html')
     context = {
-        'oauth_url': oauth_url
+        'oauth_url': request_url
     }
     return HttpResponse(template.render(context, request))
 
