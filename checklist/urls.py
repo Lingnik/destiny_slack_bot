@@ -21,5 +21,5 @@ from checklist import views
 
 urlpatterns = [
     path('', views.home, name='home'),
-    path('/auth', views.oauth_callback, name='oauth_callback')
+    path('auth', views.oauth_callback, name='oauth_callback')
 ]
