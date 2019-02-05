@@ -39,6 +39,7 @@ def oauth_callback(request):
     template = loader.get_template('checklist/oauth_callback.html')
     context = {
         'manifest': bungie_client.get_d2_manifest(),
+        'oauth_code': oauth_code,
         'oauth_token': oauth_token,
         'current_user': current_user,
     }
