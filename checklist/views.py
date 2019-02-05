@@ -34,7 +34,7 @@ def oauth_callback(request):
     try:
         current_user = bungie_client.get_user_currentuser_membership()
     except:
-        pass
+        current_user = None
 
     template = loader.get_template('checklist/oauth_callback.html')
     context = {
