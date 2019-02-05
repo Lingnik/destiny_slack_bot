@@ -100,6 +100,12 @@ class BungieApi:
         )
         return r
 
+    def get_user_currentuser_membership(self):
+        r = self._get(
+            self.BASE_URL + '/User/GetMembershipsForCurrentUser/'
+        )
+        return r
+
     def get_d2_profile(self, membership_id, membership_type, components):
         r = self._get(
             self.BASE_URL + '/Destiny2/{membershipType}/Profile/{destinyMembershipId}/'.format(
