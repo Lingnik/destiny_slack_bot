@@ -31,9 +31,15 @@ def oauth_callback(request):
     oauth_token = bungie_client.get_oauth_token(oauth_code)
     request.session['oauth_token'] = oauth_token
 
+    try:
+        current_user = bungie_client.get_user_currentuser_membership()
+    except:
+        pass
+
     template = loader.get_template('checklist/oauth_callback.html')
     context = {
         'manifest': bungie_client.get_d2_manifest(),
-        'current_user': bungie_client.get_user_currentuser_membership()
+        'oauth_token': oauth_token,
+        'current_user': current_user,
     }
     return HttpResponse(template.render(context, request))
