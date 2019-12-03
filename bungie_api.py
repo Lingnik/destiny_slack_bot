@@ -345,6 +345,37 @@ class BungieApi:
         )
         return r
 
+    def get_clan_for_player(self, membership_type, membership_id):
+        # /GroupV2/User/{membershipType}/{membershipId}/0/1/
+        """Get the user's clan.
+        
+        :param membership_type: 
+        :param membership_id: 
+        :return: 
+        """
+        r = self._get(
+            self.BASE_URL + '/GroupV2/User/{membershipType}/{membershipId}/0/1/'.format(
+                membershipType=membership_type,
+                membershipId=membership_id
+            )
+        )
+        return r
+
+    def get_clan_members(self, clan_id):
+        # https://bungie-net.github.io/#GroupV2.GetMembersOfGroup
+        # /GroupV2/{groupId}/Members/
+        """Get the members of a group (clan).
+        
+        :param clan_id: 
+        :return: 
+        """
+        r = self._get(
+            self.BASE_URL + '/GroupV2/{groupId}/Members/'.format(
+                groupId=clan_id
+            )
+        )
+        return r
+
     # #########################################################################
     # More-complex API operations below here, things that require >1 API call.
 
@@ -393,3 +424,30 @@ class BungieApi:
                     latest_activity = activity
                     latest_activity_dt = dt
         return latest_activity
+
+    def get_clan_last_on(self, clan_id):
+        """Return a clan's roster including the last time each member played and when they joined.
+    
+        :param clan_id: 
+        :return: List of dicts, each member of the clan roster
+        """
+        clan_members = self.get_clan_members(clan_id)
+        clan_members_clean = []
+        for member in clan_members['results']:
+            profile = self.get_d2_profile(
+                member['destinyUserInfo']['membershipId'],
+                member['destinyUserInfo']['membershipType'],
+                components=['100'])
+            last_played = profile['profile']['data']['dateLastPlayed']
+            last_played = datetime.datetime.strptime(last_played, '%Y-%m-%dT%H:%M:%S%z')
+            now = datetime.datetime.now(datetime.timezone.utc)
+            time_since_last_played = now - last_played
+            clan_members_clean.append(
+                {
+                    'name': member['destinyUserInfo']['displayName'],
+                    'joinDate': member['joinDate'],
+                    'lastPlayed': last_played,
+                    'timeSinceLastPlayed': str(time_since_last_played),
+                    'isOnline': member['isOnline']
+                })
+        return sorted(clan_members_clean, key=lambda i: i['lastPlayed'])
