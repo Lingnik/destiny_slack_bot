@@ -92,6 +92,17 @@ class Hawthorne:
         self.slack.slack_as_bot.chat_postMessage(channel=SLACK_CHANNEL_LOG, text=msg)
 
     @staticmethod
+    def log_local(message):
+        """Log something pertinent to the console (only).
+
+        :param message: 
+        :return: 
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        msg = f"{now} LOG_LOCAL: {message}"
+        print(msg)
+
+    @staticmethod
     def debug(message):
         """Emit debugging information, when wanted, to the console.
         
@@ -130,6 +141,7 @@ class Hawthorne:
         action_registry = [
             {'method': self.cache_bungie_manifests, 'frequency': 86400, 'last': 0, 'wait': 0},
             {'method': self.cache_player_activities, 'frequency': None, 'last': 0, 'wait': 0},
+            {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0},
             {'method': self.report_player_activity, 'frequency': 30, 'last': 0, 'wait': 0},
             {'method': self.dump_slack_history, 'frequency': 86400, 'last': 0, 'wait': 86400},
         ]
@@ -179,6 +191,13 @@ class Hawthorne:
     """
     TICKER METHODS
     """
+
+    def heartbeat(self):
+        """Log something to the console every 5 minutes to keep the Heroku worker alive.
+        
+        :return: 
+        """
+        self.log_local('heartbeat')
 
     def dump_slack_history(self):
         # TODO: Port this over from the Slack activity exporter, and write a data persistence layer

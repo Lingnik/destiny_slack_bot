@@ -33,7 +33,7 @@ class SlackApi:
         """
         auth_url = f"https://slack.com/oauth/authorize?scope={ self.oauth_scope }"
         auth_url += f"&client_id={ self.oauth_client_id }"
-        redirect_uri = urllib_parse.quote('https://destiny-rolls-checklist.herokuapp.com/slack_auth', safe='')
+        redirect_uri = urllib_parse.quote('https://hawthorne-slack-bot.herokuapp.com/slack_auth', safe='')
         auth_url += f"&redirect_uri={ redirect_uri }"
         return auth_url
 
