@@ -1,10 +1,12 @@
 import os
+import json
 
 from django.shortcuts import render
 from django.http import HttpResponse, HttpResponseRedirect
 from django.template import loader
 
-from bungie_api import BungieApi
+from bungie_wrapper import BungieApi
+from utilities import logger
 
 
 def home(request):
@@ -26,21 +28,30 @@ def home(request):
     return HttpResponse(template.render(context, request))
 
 def oauth_callback(request):
-    oauth_code = request.content_params.get('code')
-    bungie_client = BungieApi(os.environ.get('BUNGIE_API_TOKEN'))
-    oauth_token = bungie_client.get_oauth_token(oauth_code)
-    request.session['oauth_token'] = oauth_token
+    oauth_token = request.session.get('oauth_token')
+    if not oauth_token:
+        oauth_code = request.GET.get('code')
+        bungie_client = BungieApi(os.environ.get('BUNGIE_API_TOKEN'))
+        oauth_token = bungie_client.get_oauth_token(oauth_code, persist=True)
+        request.session['oauth_token'] = oauth_token
 
-    try:
-        current_user = bungie_client.get_user_currentuser_membership()
-    except:
-        current_user = None
+    bungie_client = BungieApi(os.environ.get('BUNGIE_API_TOKEN'), oauth_token=request.session['oauth_token'])
+
+    current_user = bungie_client.get_user_currentuser_membership()
+    memberships = []
+    for membership in current_user.get('destinyMemberships'):
+        bungie_client.get_d2_profile(
+            membership.get('membershipId'),
+            membership.get('membershipType'),
+            bungie_client.COMPONENTS_ALL
+        )
+        memberships.append(membership)
 
     template = loader.get_template('checklist/oauth_callback.html')
     context = {
         'manifest': bungie_client.get_d2_manifest(),
-        'oauth_code': oauth_code,
-        'oauth_token': oauth_token,
-        'current_user': current_user,
+        'oauth_token': json.dumps(oauth_token, indent=4),
+        'current_user': json.dumps(current_user, indent=4),
+        'memberships': json.dumps(memberships, indent=4),
     }
     return HttpResponse(template.render(context, request))
