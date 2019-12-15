@@ -79,7 +79,6 @@ class BungieApi:
         self.headers["X-API-Key"] = self.api_token
         self.headers["User-Agent"] = os.environ.get('BUNGIE_OAUTH_USER_AGENT', '')
 
-
     def _get(self, url, extra_headers=None, params=None, as_user=False):
         bearer_header = {}
         if as_user and self._oauth_token and 'access_token' in self._oauth_token:
@@ -87,17 +86,15 @@ class BungieApi:
         extra_headers = extra_headers or {}
         request_headers = {**self.headers, **extra_headers, **bearer_header}
 
-        now = datetime.datetime.now().timestamp()
-        if self._oauth_token and 'expires_at' in self._oauth_token and now > self._oauth_token['expires_at']:
-            #if 'refresh_expires_at' in self._oauth_token and now < self._oauth_token['refresh_expires_at']:
-            #    print('Token has expired, but we can try to refresh it.')
-            #    d2.get_oauth_token(auth_code, True)
-            #    self.refresh_oauth_token(persist=True)
-            #else:
-            raise AuthenticationExpiredException(
-                'Token has expired, and the window to refresh it has expired as well.'
-                'Fetch a new one with get_oauth_token().'
-            )
+        if self._oauth_token and 'expires_at' in self._oauth_token and self.is_token_expired():
+            if self.is_token_refresh_expired():
+                raise AuthenticationExpiredException(
+                    'Token has expired, and the window to refresh it has expired as well.'
+                    'Fetch a new one with get_oauth_token().'
+                )
+            print('Token has expired, but we can try to refresh it.')
+            #self.get_oauth_token(self.api_token, True)
+            self.refresh_oauth_token(persist=True)
 
         response = requests.get(url, headers=request_headers, params=params)
         if response.status_code != 200:
@@ -109,10 +106,41 @@ class BungieApi:
             raise Exception("API returned error: {}".format(response))
         return response['Response']
 
+    def is_token_expired(self):
+        """Validate whether the persisted OAuth token is expired or not.
+        
+        :return: True if expired, False if not.
+        """
+        if not self._oauth_token:
+            raise Exception("OAuth token has not been fetched.")
+        now = datetime.datetime.now().timestamp()
+        if now > self._oauth_token['expires_at']:
+            print('token is expired')
+            return True
+        else:
+            return False
+
+    def is_token_refresh_expired(self):
+        """Validate whether the persisted OAuth refresh token is expired or not.
+
+        :return: True if expired, False if not.
+        """
+        if not self._oauth_token:
+            raise Exception("OAuth token has not been fetched.")
+        now = datetime.datetime.now().timestamp()
+        if now > self._oauth_token['refresh_expires_at']:
+            print('token is expired')
+            return True
+        else:
+            return False
+
     def refresh_oauth_token(self, persist=False):
-        """Not implemented."""
-        self._oauth_token = None
-        raise Exception("Token Refresh Not Implemented - Must Reauthenticate")
+        """Refresh an existing OAuth token.
+
+        :param persist: 
+        :return: 
+        """
+        return self.get_oauth_token(self.api_token, persist=persist, use_refresh_token=True)
 
     def get_oauth_token(self, code, persist=False, use_refresh_token=False):
         """Fetch an OAuth token for the user's authentication code.
@@ -130,6 +158,12 @@ class BungieApi:
            grabs an epehemeral oauth token from Bungie's API.
         4. Using that oauth token, we can now do privileged things against the Bungie API as that user!
         
+        When refreshing tokens, the following rules apply:
+        * Make a refresh request to the token endpoint using the following parameters in the body of the POST:
+            grant_type: Value must be set to “refresh_token”
+            refresh_token: Previously issued refresh token
+        * The client must not include the scope parameter. The new access token will have the same scope as the one being refreshed.
+        
         :param code: the OAuth code (a querystring provided by Bungie in their auth redirect) identifying the user
         :param persist: persist the resulting OAuth token in the API client instance for subsequent .get()s
         :param use_refresh_token: use the refresh token (instead of the auth token) to refresh an existing auth
@@ -142,10 +176,11 @@ class BungieApi:
         data = {
             'grant_type': 'authorization_code',
             'client_id': client_id,
-            'code': code
+            'code': code,
         }
         if use_refresh_token:
-            password = self._oauth_token['refresh_token']
+            data['grant_type'] = 'refresh_token'
+            data['refresh_token'] = self._oauth_token['refresh_token']
         with requests.Session() as s:
             s.headers = self.headers
             r = s.post(url, data=data, auth=requests.auth.HTTPBasicAuth(username, password))
@@ -175,18 +210,20 @@ class BungieApi:
             return False
 
         # The token is expired and non-refreshable.
-        now = datetime.datetime.now().timestamp()
-        if now > self._oauth_token['expires_at'] and now > self._oauth_token['refresh_expires_at']:
-            print('token is expired')
-            return False
+        if self.is_token_expired():
+            if self.is_token_refresh_expired():
+                print('token is expired and cannot be refreshed')
+                return False
+            self.refresh_oauth_token(persist=True)
 
         if validate:
             current_user = self.get_user_currentuser_membership()
             logger.debug(current_user)
         return True
 
-    # #########################################################################
-    # Methods that call the API once:
+    """
+    Methods that call the API once:
+    """
 
     def get_user_currentuser_membership(self):
         """Get the currently-authenticated user's Memberships."""
@@ -376,8 +413,10 @@ class BungieApi:
         )
         return r
 
-    # #########################################################################
-    # More-complex API operations below here, things that require >1 API call.
+
+    """
+    More-complex API operations below here, things that require >1 API call.
+    """
 
     def get_primary_membership(self, membership_type, membership_id):
         """For a given player "membership", fetch the canonical membership associated with their cross-save config.
@@ -424,6 +463,32 @@ class BungieApi:
                     latest_activity = activity
                     latest_activity_dt = dt
         return latest_activity
+
+    def get_current_activity(self, membership_type, membership_id):
+        """
+        
+        :param membership_type: 
+        :param membership_id: 
+        :return: three-tuple of activity_hash, activity_mode_hash, active_character or None,None,None if no activity
+        """
+        activities = self.get_d2_profile(membership_id, membership_type, ['204'])
+        characters = activities['characterActivities']['data']
+        activity_hash = None
+        activity_mode_hash = None
+        active_character = None
+        for key in characters:
+            tmp_activity_hash = characters[key]['currentActivityHash']
+            tmp_activity_mode_hash = characters[key]['currentActivityModeHash']
+            if tmp_activity_hash in (0, 82913930) and tmp_activity_mode_hash in (0, 2166136261):
+                continue
+            else:
+                activity_hash = tmp_activity_hash
+                activity_mode_hash = tmp_activity_mode_hash
+                active_character = key
+                break
+
+        return activity_hash, activity_mode_hash, active_character
+
 
     def get_clan_last_on(self, clan_id):
         """Return a clan's roster including the last time each member played and when they joined.
