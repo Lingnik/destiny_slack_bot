@@ -193,14 +193,19 @@ class Hawthorne:
                         continue
                 if last + frequency < now:
                     action_call = action['method']
-                    try:
+                    if DEBUG:
                         action_call_name = action_call.__name__
-                        self.debug(f"Ticking on {action_call_name}.")
+                        self.debug(f"Ticking on {action_call_name}. [DEBUG]")
                         action_call()
-                    except Exception as e:
-                        thread_ts = self.log(f"Exception occurred when ticking on {action_call_name}.")
-                        self.log_thread(thread_ts, f"```\n{e}\n```")
-                        break
+                    else:
+                        try:
+                            action_call_name = action_call.__name__
+                            self.debug(f"Ticking on {action_call_name}.")
+                            action_call()
+                        except Exception as e:
+                            thread_ts = self.log(f"Exception occurred when ticking on {action_call_name}.")
+                            self.log_thread(thread_ts, f"```\n{e}\n```")
+                            break
                     action_registry[i]['last'] = now
                     break
 
@@ -271,27 +276,28 @@ class Hawthorne:
                 self.debug(f"{activity['slack_member']['slack_display_name']}: No activity.")
                 continue
 
-            # Cache-check and don't be spammy.
             cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
-            seen_activities = self.player_activity_cache.get(cache_key, -1).copy()
-            new_activity = activity['activity']['hash']
-            if len(self.player_activity_cache[cache_key]) > 10:  # Only cache up to 10 recent activity hashes.
-                del self.player_activity_cache[cache_key][0]
-            self.player_activity_cache[cache_key].append(new_activity)  # Update the cache.
-            if seen_activities is None or seen_activities == -1:
-                # None: Previously no activity.
-                # -1: Player wasn't in cache previously.
-                pass
-            elif isinstance(seen_activities, list) and new_activity in seen_activities:
-                # Same: no change in activity, so skip.
-                # Different: change in activity, so "pass" (report it).
-                self.debug(f"{activity['slack_member']['slack_display_name']}: Seen activity: {new_activity}")
+            new_activity_hash = activity['activity']['hash']
+
+            # Fetch and update the cache.
+            seen_activities = self.player_activity_cache.get(cache_key)
+            if seen_activities is not None and isinstance(seen_activities, list):
+                seen_activities = seen_activities.copy()
+                if len(seen_activities) > 10:  # Only cache up to 10 recent activity hashes.
+                    del self.player_activity_cache[cache_key][0]
+            else:
+                self.player_activity_cache[cache_key] = []
+            self.player_activity_cache[cache_key].append(new_activity_hash)  # Update the cache.
+
+            # If the activity is in the cache, skip announcing.
+            if isinstance(seen_activities, list) and new_activity_hash in seen_activities:
+                self.debug(f"{activity['slack_member']['slack_display_name']}: Seen activity: {new_activity_hash}")
                 continue
 
             # Announce the activity.
             msg = self.activity_message_for(activity)
             self.announce(msg)
-            self.log(f"{cache_key}: {new_activity}")
+            self.log(f"{cache_key}: {new_activity_hash}")
 
     """
     HELPER METHODS
