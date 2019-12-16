@@ -22,10 +22,6 @@ MEMBERSHIP_TYPE_STADIA = 5
 # #hawthorne-log = CRDP36TMX
 # #hawthorne-playground = CRJERJ0S3
 # #destiny-export = CQDKVNF3R
-SLACK_CHANNEL_HAWTHORNE = 'CR0NPJWBT'
-SLACK_CHANNEL_HAWTHORNE_PLAYGROUND = 'CRJERJ0S3'
-SLACK_CHANNEL_LOG = 'CRDP36TMX'
-SLACK_BOT_USER_ID = 'UQEBKRX47'
 SLACK_FIELD_PSN = 'Xf0DB6LM46'
 SLACK_FIELD_XBL = 'XfMDV8FH3K'
 SLACK_FIELD_STM = 'XfMKSQK1S8'
@@ -47,6 +43,9 @@ class Hawthorne:
             slack_oauth_token,
             bungie_api_token,
             bungie_oauth_token,
+            slack_channel_hawthorne,
+            slack_channel_log,
+            slack_bot_user_id,
             slack,
             bungie
     ):
@@ -57,6 +56,9 @@ class Hawthorne:
         self.slack_oauth_token = slack_oauth_token
         self.bungie_api_token = bungie_api_token
         self.bungie_oauth_token = bungie_oauth_token
+        self.slack_channel_hawthorne = slack_channel_hawthorne
+        self.slack_channel_log = slack_channel_log
+        self.slack_bot_user_id = slack_bot_user_id
         self.slack = slack
         self.bungie = bungie
 
@@ -78,7 +80,7 @@ class Hawthorne:
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         print(f"{now} SLACK: {message}")#
-        self.slack.slack_as_bot.chat_postMessage(channel=SLACK_CHANNEL_HAWTHORNE, text=message)
+        self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_hawthorne, text=message)
 
     def log(self, message):
         """Log something pertinent to the Slack log channel (and the console).
@@ -89,7 +91,7 @@ class Hawthorne:
         now = datetime.datetime.now(datetime.timezone.utc)
         msg = f"{now} LOG: {message}"
         print(msg)
-        self.slack.slack_as_bot.chat_postMessage(channel=SLACK_CHANNEL_LOG, text=msg)
+        self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, text=msg)
 
     @staticmethod
     def log_local(message):
@@ -139,9 +141,9 @@ class Hawthorne:
 
         # Register actions that the loop will tick against.
         action_registry = [
+            {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0},
             {'method': self.cache_bungie_manifests, 'frequency': 86400, 'last': 0, 'wait': 0},
             {'method': self.cache_player_activities, 'frequency': None, 'last': 0, 'wait': 0},
-            {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0},
             {'method': self.report_player_activity, 'frequency': 30, 'last': 0, 'wait': 0},
             {'method': self.dump_slack_history, 'frequency': 86400, 'last': 0, 'wait': 86400},
         ]
@@ -281,7 +283,7 @@ class Hawthorne:
         :return: 
         """
         players_activities = []
-        channel_members = self.fetch_slack_channel_members(SLACK_CHANNEL_HAWTHORNE)
+        channel_members = self.fetch_slack_channel_members(self.slack_channel_hawthorne)
         for member in channel_members:
             # Ask for the user by gamertag and fetch their Bungie.net profile.
             if 'destiny_psn_id' in member and member['destiny_psn_id']:
@@ -341,7 +343,11 @@ class Hawthorne:
         slack_display_name = activity["slack_member"]["slack_display_name"]
         destiny_player_name = activity["destiny_player_name"]
         activity_name = activity["activity_name"]
-        return f':robot_face: @{slack_display_name} ({destiny_player_name}) is now playing {activity_name}'
+        if not slack_display_name:
+            display_name = f'*{destiny_player_name}*'
+        else:
+            display_name = f'*{destiny_player_name}* (@{slack_display_name})'
+        return f':hawthorne: {display_name} is now playing *{activity_name}*'
 
     def fetch_slack_channel_members(self, slack_channel_id):
         """Fetch all the Slack members for a channel and their various Destiny usernames.
@@ -422,6 +428,9 @@ def command_line_main():
     slack_oauth_client_id = required_environment_variable('SLACK_OAUTH_CLIENT_ID')
     slack_oauth_client_secret = required_environment_variable('SLACK_OAUTH_CLIENT_SECRET')
     slack_oauth_token = optional_environment_variable('SLACK_OAUTH_TOKEN')
+    slack_channel_hawthorne = required_environment_variable('SLACK_CHANNEL_HAWTHORNE')
+    slack_channel_log = required_environment_variable('SLACK_CHANNEL_LOG')
+    slack_bot_user_id = required_environment_variable('SLACK_BOT_USER_ID')
     bungie_api_token = required_environment_variable('BUNGIE_API_TOKEN')
     bungie_oauth_token = optional_environment_variable('BUNGIE_OAUTH_TOKEN')
     if bungie_oauth_token:
@@ -473,6 +482,9 @@ def command_line_main():
         slack_oauth_token,
         bungie_api_token,
         bungie_oauth_token,
+        slack_channel_hawthorne,
+        slack_channel_log,
+        slack_bot_user_id,
         slack,
         bungie
     )
