@@ -7,6 +7,7 @@ import pprint
 import shlex
 import datetime
 import time
+import signal
 
 import requests
 
@@ -27,7 +28,8 @@ SLACK_FIELD_XBL = 'XfMDV8FH3K'
 SLACK_FIELD_STM = 'XfMKSQK1S8'
 
 
-DEBUG = os.environ.get('HAWTHORNE_DEBUG', False)
+SIGTERM_RECEIVED = False
+DEBUG = bool(os.environ.get('HAWTHORNE_DEBUG', False))
 pp = pprint.PrettyPrinter(indent=4)
 
 
@@ -65,7 +67,7 @@ class Hawthorne:
         self.bungie_manifest = None
         self.bungie_manifest_activity_definitions = None
         self.bungie_manifest_activity_mode_definitions = None
-        self.player_activity_cache = None
+        self.player_activity_cache = None  # type: dict
         self.keep_running = False
 
     """
@@ -80,7 +82,7 @@ class Hawthorne:
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         print(f"{now} SLACK: {message}")#
-        self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_hawthorne, text=message)
+        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_hawthorne, text=message).get('ts')
 
     def log(self, message):
         """Log something pertinent to the Slack log channel (and the console).
@@ -91,7 +93,16 @@ class Hawthorne:
         now = datetime.datetime.now(datetime.timezone.utc)
         msg = f"{now} LOG: {message}"
         print(msg)
-        self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, text=msg)
+        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, text=msg).get('ts')
+
+    def log_thread(self, thread_ts, message):
+        """Log a followup to a thread.
+        
+        :param thread_ts: 
+        :param message: 
+        :return: 
+        """
+        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, thread_ts=thread_ts, text=message)
 
     @staticmethod
     def log_local(message):
@@ -139,6 +150,8 @@ class Hawthorne:
         # exceeds the frequency or if another method call results in an execution time being missed, but it will attempt
         # to execute things as soon as possible after they are scheduled to be run.
 
+        self.announce("I'm back! [Bot started.]")
+
         # Register actions that the loop will tick against.
         action_registry = [
             {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0},
@@ -158,8 +171,12 @@ class Hawthorne:
         self.log("Starting action ticker.")
         self.keep_running = True
         while self.keep_running is True:
+            if SIGTERM_RECEIVED:
+                self.keep_running = False
+                msg = "I need to feed Louis before he freaks out again, brb. [Heroku is probably restarting me.]"
+                self.announce(msg)
             if self.keep_running is False:
-                self.log('Hawthorne has been instructed to stop.')
+                self.log('Hawthorne has been instructed to stop. Breaking out of tick loop.')
                 break
             time.sleep(1)  # We sleep by one second to prevent bot spam.
             self.debug('TICK')
@@ -181,8 +198,8 @@ class Hawthorne:
                         self.debug(f"Ticking on {action_call_name}.")
                         action_call()
                     except Exception as e:
-                        self.log(f"Exception occurred when ticking on {action_call_name}.")
-                        self.log(f"```\n{e}\n```")
+                        thread_ts = self.log(f"Exception occurred when ticking on {action_call_name}.")
+                        self.log_thread(thread_ts, f"```\n{e}\n```")
                         break
                     action_registry[i]['last'] = now
                     break
@@ -228,20 +245,20 @@ class Hawthorne:
 
         :return: 
         """
-        self.log("Pre-caching player activities...")
+        self.log("*Pre-caching player activities...*")
         self.player_activity_cache = {}
         players_activities = self.get_players_activities()
         for activity in players_activities:
             cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
             if activity['active_character'] is None:
-                self.log(f"Cache: No activity for {cache_key}")
-                self.player_activity_cache[cache_key] = None
+                self.log(f"_Cache:_ No activity for {cache_key}")
+                # self.player_activity_cache[cache_key] = None
                 continue
 
             msg = self.activity_message_for(activity)
-            self.log(f"Cache: Activity for {cache_key}: {msg}")
+            self.log(f"_Cache:_ Activity for {cache_key}: {activity['activity']['hash']} `{msg}`")
             cache_val = activity["activity"]["hash"]
-            self.player_activity_cache[cache_key] = cache_val
+            self.player_activity_cache[cache_key] = [cache_val]
 
     def report_player_activity(self):
         """Report on player activity.
@@ -256,22 +273,25 @@ class Hawthorne:
 
             # Cache-check and don't be spammy.
             cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
-            cached_activity = self.player_activity_cache.get(cache_key, -1)
+            seen_activities = self.player_activity_cache.get(cache_key, -1).copy()
             new_activity = activity['activity']['hash']
-            self.player_activity_cache[cache_key] = new_activity  # Update the cache.
-            if cached_activity is None or cached_activity == -1:
+            if len(self.player_activity_cache[cache_key]) > 10:  # Only cache up to 10 recent activity hashes.
+                del self.player_activity_cache[cache_key][0]
+            self.player_activity_cache[cache_key].append(new_activity)  # Update the cache.
+            if seen_activities is None or seen_activities == -1:
                 # None: Previously no activity.
                 # -1: Player wasn't in cache previously.
                 pass
-            elif cached_activity == new_activity:
+            elif isinstance(seen_activities, list) and new_activity in seen_activities:
                 # Same: no change in activity, so skip.
                 # Different: change in activity, so "pass" (report it).
-                self.debug(f"{activity['slack_member']['slack_display_name']}: Same activity.")
+                self.debug(f"{activity['slack_member']['slack_display_name']}: Seen activity: {new_activity}")
                 continue
 
             # Announce the activity.
             msg = self.activity_message_for(activity)
             self.announce(msg)
+            self.log(f"{cache_key}: {new_activity}")
 
     """
     HELPER METHODS
@@ -488,9 +508,28 @@ def command_line_main():
         slack,
         bungie
     )
+    signal.signal(signal.SIGTERM, receive_signal)
     print("Starting Hawthorne.")
     bot.start()
     print("Hawthorne has stopped.")
+
+
+def receive_signal(signal_number, frame):
+    """Receive UNIX process signals so we can handle Heroku's SIGTERM and shut down gracefully.
+    
+    :param signal_number: 
+    :param frame: 
+    :return: 
+    """
+    global SIGTERM_RECEIVED
+
+    if signal_number == 15:
+        print('SIGTERM received.')
+        SIGTERM_RECEIVED = True
+    else:
+        print(f"Signal received: {signal_number}")
+
+    return
 
 if __name__ == "__main__":
     command_line_main()
