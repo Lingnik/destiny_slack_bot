@@ -505,7 +505,7 @@ class BungieApi:
             tmp_activity_start_time = characters[key].get('dateActivityStarted', '1980-01-01T01:01:01Z')
             tmp_activity_start_time = datetime.datetime.strptime(tmp_activity_start_time, '%Y-%m-%dT%H:%M:%S%z')
             tmp_activity_start_time = tmp_activity_start_time.timestamp()
-            if tmp_activity_hash in (0, 82913930, 3903562779.1) and tmp_activity_mode_hash in (0, 2166136261, 1589650888):
+            if tmp_activity_hash in (0, 82913930, 3903562779) and tmp_activity_mode_hash in (0, 2166136261, 1589650888):
                 # Skip Orbit because it's erroneous and Tower because it tends to get stuck
                 continue
             else:
