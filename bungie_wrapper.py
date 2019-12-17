@@ -52,6 +52,25 @@ class AuthenticationExpiredException(Exception):
     """The authentication token from Bungie has expired and a new one must be obtained with get_oauth_token()."""
     pass
 
+
+class Non200ResponseException(Exception):
+    """This exception occurs when Bungie.net returns a non-200 HTTP code."""
+    def __init__(self, message, response):
+        # Call the base class constructor with the parameters it needs
+        super().__init__(message)
+
+        # Now for your custom code...
+        self.response = response
+
+class ResponseWasNotSuccessfulException(Exception):
+    """This exception occurs when the Bungie.net response indicates it was not successful."""
+    def __init__(self, message, response):
+        # Call the base class constructor with the parameters it needs
+        super().__init__(message)
+
+        # Now for your custom code...
+        self.response = response
+
 class BungieApi:
     """A lean method-per-API-endpoint-based interface around the Bungie API."""
     BASE_URL = 'https://stats.bungie.net/Platform'
@@ -98,12 +117,15 @@ class BungieApi:
 
         response = requests.get(url, headers=request_headers, params=params)
         if response.status_code != 200:
-            raise Exception("API returned non-200 status code: {} - {} - {}".format(response.status_code,
-                                                                                    response.reason,
-                                                                                    response.text))
+            raise Non200ResponseException(
+                "API returned non-200 status code: {} - {} - {}".format(response.status_code,
+                                                                        response.reason,
+                                                                        response.text),
+                response
+            )
         response = response.json()
         if response['ErrorStatus'] != 'Success':
-            raise Exception("API returned error: {}".format(response))
+            raise ResponseWasNotSuccessfulException("API returned error: {}".format(response), response)
         return response['Response']
 
     def is_token_expired(self):

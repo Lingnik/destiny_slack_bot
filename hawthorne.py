@@ -12,7 +12,7 @@ import signal
 import requests
 
 from slack_wrapper import SlackApi
-from bungie_wrapper import BungieApi
+from bungie_wrapper import BungieApi, Non200ResponseException
 
 MEMBERSHIP_TYPE_XBOX = 1
 MEMBERSHIP_TYPE_PSN = 2
@@ -27,7 +27,7 @@ SLACK_FIELD_PSN = 'Xf0DB6LM46'
 SLACK_FIELD_XBL = 'XfMDV8FH3K'
 SLACK_FIELD_STM = 'XfMKSQK1S8'
 
-
+MAINTENANCE_SLEEP_TIME = 300
 SIGTERM_RECEIVED = False
 DEBUG = bool(os.environ.get('HAWTHORNE_DEBUG', False))
 pp = pprint.PrettyPrinter(indent=4)
@@ -69,6 +69,9 @@ class Hawthorne:
         self.bungie_manifest_activity_mode_definitions = None
         self.player_activity_cache = None  # type: dict
         self.keep_running = False
+        self.back_pressure = None
+        self.status_thread_ts = None
+        self.status_log_thread_ts = None
 
     """
     LOGGERS
@@ -102,6 +105,7 @@ class Hawthorne:
         :param message: 
         :return: 
         """
+        print(message)
         return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, thread_ts=thread_ts, text=message)
 
     @staticmethod
@@ -154,11 +158,11 @@ class Hawthorne:
 
         # Register actions that the loop will tick against.
         action_registry = [
-            {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0},
-            {'method': self.cache_bungie_manifests, 'frequency': 86400, 'last': 0, 'wait': 0},
-            {'method': self.cache_player_activities, 'frequency': None, 'last': 0, 'wait': 0},
-            {'method': self.report_player_activity, 'frequency': 30, 'last': 0, 'wait': 0},
-            {'method': self.dump_slack_history, 'frequency': 86400, 'last': 0, 'wait': 86400},
+            {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0, 'calls-api': False},
+            {'method': self.cache_bungie_manifests, 'frequency': 86400, 'last': 0, 'wait': 0, 'calls-api': True},
+            {'method': self.cache_player_activities, 'frequency': None, 'last': 0, 'wait': 0, 'calls-api': True},
+            {'method': self.report_player_activity, 'frequency': 30, 'last': 0, 'wait': 0, 'calls-api': True},
+            {'method': self.dump_slack_history, 'frequency': 86400, 'last': 0, 'wait': 86400, 'calls-api': False},
         ]
         # Enqueue future things that we're waiting on by setting their 'last' to the future.
         for i, action in enumerate(action_registry):
@@ -178,6 +182,7 @@ class Hawthorne:
             if self.keep_running is False:
                 self.log('Hawthorne has been instructed to stop. Breaking out of tick loop.')
                 break
+            self.back_off_if_needed()
             time.sleep(1)  # We sleep by one second to prevent bot spam.
             self.debug('TICK')
 
@@ -202,6 +207,24 @@ class Hawthorne:
                             action_call_name = action_call.__name__
                             self.debug(f"Ticking on {action_call_name}.")
                             action_call()
+                            if self.status_thread_ts:
+                                self.status_thread_ts = None
+                                self.status_log_thread_ts = None
+                        except Non200ResponseException as e:
+                            response_data = json.loads(e.response.text)
+                            if response_data.get('ErrorStatus') == 'SystemDisabled':
+                                if self.status_thread_ts:
+                                    self.log_thread(self.status_log_thread_ts, f'Maintenance message: `{e.response.text}`')
+                                    self.log_thread(self.status_thread_ts, 'Bungie.net is still down for maintenance. Will check again in 5 minutes.')
+                                    self.back_pressure = MAINTENANCE_SLEEP_TIME
+                                    break
+                                self.status_log_thread_ts = self.log(f'Maintenance message: `{e.response.text}`')
+                                self.status_thread_ts = self.announce("Looks like Bungie.net is down for maintenance. :thread: for status updates.")
+                                self.back_pressure = MAINTENANCE_SLEEP_TIME
+                                break
+                            thread_ts = self.log(f"Non200ResponseException occurred when ticking on {action_call_name}.")
+                            self.log_thread(thread_ts, f"```\n{e}\n```")
+                            break
                         except Exception as e:
                             thread_ts = self.log(f"Exception occurred when ticking on {action_call_name}.")
                             self.log_thread(thread_ts, f"```\n{e}\n```")
@@ -215,6 +238,21 @@ class Hawthorne:
     """
     TICKER METHODS
     """
+
+    def back_off_if_needed(self):
+        """Check whether we have received backpressure from the API and wait a bit.
+        
+        :return: 
+        """
+        if self.back_pressure is None:
+            return
+
+        seconds = self.back_pressure
+        self.log(f'Backpressure signal received. Backing off for {seconds} seconds.')
+        time.sleep(seconds)
+        self.log('Backoff ending.')
+
+        self.back_pressure = None
 
     def heartbeat(self):
         """Log something to the console every 5 minutes to keep the Heroku worker alive.
