@@ -61,8 +61,8 @@ class Hawthorne:
         self.slack_channel_hawthorne = slack_channel_hawthorne
         self.slack_channel_log = slack_channel_log
         self.slack_bot_user_id = slack_bot_user_id
-        self.slack = slack
-        self.bungie = bungie
+        self.slack = slack  # type: SlackApi
+        self.bungie = bungie  # type: BungieApi
 
         self.bungie_manifest = None
         self.bungie_manifest_activity_definitions = None
@@ -332,7 +332,7 @@ class Hawthorne:
             membership_id = player[0]['membershipId']
 
             # Get the "current" activity for the player and hydrate that with additional context.
-            activity, activity_mode, active_character = self.bungie.get_current_activity(membership_type, membership_id)
+            activity, activity_mode, active_character, activity_timestamp = self.bungie.get_current_activity(membership_type, membership_id)
             activity_name = None
             if active_character is not None:
                 activity_name = ""

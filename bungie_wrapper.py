@@ -54,7 +54,7 @@ class AuthenticationExpiredException(Exception):
 
 class BungieApi:
     """A lean method-per-API-endpoint-based interface around the Bungie API."""
-    BASE_URL = 'https://www.bungie.net/Platform'
+    BASE_URL = 'https://stats.bungie.net/Platform'
     MEMBERSHIP_TYPES = {'xbox': '1', 'xbone': '1', 'psn': '2', 'pc': '4', 'ps4': '2'}
     COMPONENTS_ALL = [
         'Profiles', 'VendorReceipts', 'ProfileInventories', 'ProfileCurrencies', 'ProfileProgression', 'Characters',
@@ -476,18 +476,29 @@ class BungieApi:
         activity_hash = None
         activity_mode_hash = None
         active_character = None
+        activity_start_time = 0
         for key in characters:
             tmp_activity_hash = characters[key]['currentActivityHash']
             tmp_activity_mode_hash = characters[key]['currentActivityModeHash']
-            if tmp_activity_hash in (0, 82913930) and tmp_activity_mode_hash in (0, 2166136261):
+            tmp_activity_start_time = characters[key].get('dateActivityStarted', '1980-01-01T01:01:01Z')
+            tmp_activity_start_time = datetime.datetime.strptime(tmp_activity_start_time, '%Y-%m-%dT%H:%M:%S%z')
+            tmp_activity_start_time = tmp_activity_start_time.timestamp()
+            if tmp_activity_hash in (0, 82913930, 3903562779.1) and tmp_activity_mode_hash in (0, 2166136261, 1589650888):
+                # Skip Orbit because it's erroneous and Tower because it tends to get stuck
                 continue
             else:
-                activity_hash = tmp_activity_hash
-                activity_mode_hash = tmp_activity_mode_hash
-                active_character = key
-                break
+                # Find the activity with the most recent start time, since Bungie sometimes reports old activities
+                # as the current activity on a character that isn't actually logged in. More details:
+                # * https://github.com/Bungie-net/api/issues/1030
+                # * https://github.com/Bungie-net/api/wiki/Affinitization:-benefits,-drawbacks,-how-to
+                if tmp_activity_start_time > activity_start_time:
+                    activity_hash = tmp_activity_hash
+                    activity_mode_hash = tmp_activity_mode_hash
+                    activity_start_time = tmp_activity_start_time
+                    active_character = key
+                continue
 
-        return activity_hash, activity_mode_hash, active_character
+        return activity_hash, activity_mode_hash, active_character, activity_start_time
 
 
     def get_clan_last_on(self, clan_id):
