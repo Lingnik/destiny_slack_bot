@@ -353,17 +353,17 @@ class Hawthorne:
             if 'destiny_psn_id' in member and member['destiny_psn_id']:
                 player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_PSN,
                                                       display_name=member['destiny_psn_id'])
-            elif 'destiny_xbl_id' in member and member['destiny_xbl_id']:
-                player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_XBOX,
-                                                      display_name=member['destiny_xbl_id'])
             elif 'destiny_stm_id' in member and member['destiny_stm_id']:
                 player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_STEAM,
                                                       display_name=member['destiny_stm_id'])
+            elif 'destiny_xbl_id' in member and member['destiny_xbl_id']:
+                player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_XBOX,
+                                                      display_name=member['destiny_xbl_id'])
             else:
                 self.log(f"Player is a member of channel, but has no gamer tags: {member['slack_display_name']}")
                 continue
             if len(player) == 0:
-                self.log(f"Unable to find characters for member: {member['slack_display_name']}")
+                self.log(f"Unable to find characters for member: {member['slack_id']} {member['slack_display_name']}")
                 continue
             player_name = player[0]['displayName']
             membership_type = player[0]['membershipType']
