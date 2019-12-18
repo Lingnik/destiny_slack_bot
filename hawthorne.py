@@ -411,7 +411,28 @@ class Hawthorne:
             display_name = f'*{destiny_player_name}*'
         else:
             display_name = f'*{destiny_player_name}* (@{slack_display_name})'
-        return f':hawthorne: {display_name} is now playing *{activity_name}*'
+        emoji = ""
+        if activity_name.startswith('Explore - '):
+            emoji = ':fireteam:'
+        elif activity_name.startswith('Control - '):
+            emoji = ':crucible:'
+        elif activity_name.startswith('Garden of Salvation'):
+            emoji = ':raid2:'
+        elif activity_name.startswith('Team Scorched - '):
+            emoji = ':crucible:'
+        elif activity_name.startswith('Scored Nightfall Strikes - '):
+            emoji = ':nightfall:'
+        elif activity_name.startswith('Normal Strikes - '):
+            emoji = ':vanguard2:'
+        elif activity_name.startswith('Clash - '):
+            emoji = ':crucible:'
+        elif activity_name.startswith('Gambit '):
+            emoji = ':gambit:'
+        elif activity_name.startswith('Dungeon - '):
+            emoji = ':dungeon:'
+        elif activity_name.startswith('Story - The Shattered Throne'):
+            emoji = ':dungeon:'
+        return f':hawthorne: {display_name} is now playing {emoji} *{activity_name}*'
 
     def fetch_slack_channel_members(self, slack_channel_id):
         """Fetch all the Slack members for a channel and their various Destiny usernames.
