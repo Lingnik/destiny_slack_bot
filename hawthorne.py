@@ -67,6 +67,7 @@ class Hawthorne:
         self.bungie = bungie  # type: BungieApi
 
         self.unable_to_find_users_squelch = {}
+        self.slack_seen_cache = {}
         self.bungie_manifest = None
         self.bungie_manifest_activity_definitions = None
         self.bungie_manifest_activity_mode_definitions = None
@@ -266,7 +267,7 @@ class Hawthorne:
 
     def dump_slack_history(self):
         # TODO: Port this over from the Slack activity exporter, and write a data persistence layer
-        """
+        """Not implemented.
         
         :return: 
         """
@@ -293,28 +294,37 @@ class Hawthorne:
         """
         self.log(":information_source: *Pre-caching player activities...*")
         self.player_activity_cache = {}
-        players_activities = self.get_players_activities()
+        players_activities = self.get_players_activities(is_cache_run=True)
         for activity in players_activities:
+            tmp_uid = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']} {activity['slack_member']['slack_id']}"
             cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
             if activity['active_character'] is None:
-                self.log(f":information_source: _Cache:_ No activity for {cache_key}")
+                self.log(f":information_source: _Cache:_ No activity for {tmp_uid}")
                 # self.player_activity_cache[cache_key] = None
                 continue
 
             msg = self.activity_message_for(activity)
-            self.log(f":information_source: _Cache:_ Activity for {cache_key}: {activity['activity']['hash']} `{msg}`")
+            self.log(f":information_source: _Cache:_ Activity for {tmp_uid}: {activity['activity']['hash']} `{msg}`")
             cache_val = activity["activity"]["hash"]
             self.player_activity_cache[cache_key] = [cache_val]
+        self.log(':information_source: *Caching complete*')
 
     def report_player_activity(self):
         """Report on player activity.
 
         :return: 
         """
+        self.debug('report_player_activity()')
         players_activities = self.get_players_activities()
         for activity in players_activities:
+            slack_id = activity['slack_member']['slack_id']
+            slack_name = activity['slack_member']['slack_display_name']
+            msg = ("Your in-game activities will be shared in this channel."
+                   " Check out the instructions pinned in the sidebar.")
+            self.first_seen(slack_id, slack_name, msg)
+
             if activity['active_character'] is None:
-                self.debug(f"{activity['slack_member']['slack_display_name']}: No activity.")
+                self.debug(f"{slack_id} {slack_name}: No activity.")
                 continue
 
             cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
@@ -344,7 +354,27 @@ class Hawthorne:
     HELPER METHODS
     """
 
-    def get_players_activities(self):
+    def first_seen(self, slack_id, slack_name, msg):
+        """Onboard a user when they first join the channel.
+        
+        :param slack_id: 
+        :param slack_name: 
+        :param msg: 
+        :return: 
+        """
+        slack_channel = self.slack_channel_hawthorne
+        message = f":hawthorne: :wave: Welcome to <#{slack_channel}>, <@{slack_id}>! {msg}"
+        if not self.slack_seen_cache.get(slack_id):
+            self.log(f":wave: First seen: {slack_id} {slack_name}")
+            self.slack.slack_as_bot.chat_postEphemeral(
+                channel=slack_channel,
+                user=slack_id,
+                text=message,
+                parse='mrkdwn'
+            )
+            self.slack_seen_cache[slack_id] = True
+
+    def get_players_activities(self, is_cache_run=False):
         """Get a list of players (dicts) of a channel and their most recent activity.
         
         :return: 
@@ -356,20 +386,36 @@ class Hawthorne:
         channel_members = self.fetch_slack_channel_members(slack_channel)
 
         for member in channel_members:
+            slack_id = member['slack_id']
+            slack_name = member['slack_display_name']
+            if is_cache_run:
+                self.slack_seen_cache[slack_id] = True
             try:
                 activity = self.get_activity_for_slack_user(member)
                 players_activities.append(activity)
-                self.unable_to_find_users_squelch[member['slack_id']] = False
+                self.unable_to_find_users_squelch[slack_id] = False
+
             except self.SlackUserHasNoGamerTags:
-                if not self.unable_to_find_users_squelch.get(member['slack_id']):
-                    self.log(f":warning: Player is a member of channel, but has no gamer tags: {member['slack_display_name']}")
-                self.unable_to_find_users_squelch[member['slack_id']] = True
+                if not self.unable_to_find_users_squelch.get(slack_id):
+                    self.log(f":warning: Player is a member of channel, but has no gamer tags: {slack_name}")
+                self.unable_to_find_users_squelch[slack_id] = True
+                if not is_cache_run:
+                    msg = ("You currently do not have any gamer tags in your user profile, and your activity won't be shown"
+                           " until that's the case. Check out the instructions pinned in the sidebar.")
+                    self.first_seen(slack_id, slack_name, msg)
                 continue
+
             except self.SlackUserHasNoCharacters:
                 if not self.unable_to_find_users_squelch.get(member['slack_id']):
                     self.log(f":warning: Unable to find characters for member: {member['slack_id']} {member['slack_display_name']}")
                 self.unable_to_find_users_squelch[member['slack_id']] = True
+                if not is_cache_run:
+                    msg = ("You have some gamer tags in your user profile, but I wasn't able to locate any characters"
+                           " for your gamer tags, and your activity won't be shown until that's the case."
+                           " Check out the instructions pinned in the sidebar.")
+                    self.first_seen(slack_id, slack_name, msg)
                 continue
+
         return players_activities
 
     class SlackUserHasNoGamerTags(Exception):
