@@ -49,7 +49,8 @@ class Hawthorne:
             slack_channel_log,
             slack_bot_user_id,
             slack,
-            bungie
+            bungie,
+            slack_channel_for_staging_with_real_users=None
     ):
         self.slack_api_token = slack_api_token
         self.slack_incoming_webhook_url = slack_incoming_webhook_url
@@ -59,11 +60,13 @@ class Hawthorne:
         self.bungie_api_token = bungie_api_token
         self.bungie_oauth_token = bungie_oauth_token
         self.slack_channel_hawthorne = slack_channel_hawthorne
+        self.slack_channel_for_staging_with_real_users = slack_channel_for_staging_with_real_users
         self.slack_channel_log = slack_channel_log
         self.slack_bot_user_id = slack_bot_user_id
         self.slack = slack  # type: SlackApi
         self.bungie = bungie  # type: BungieApi
 
+        self.unable_to_find_users_squelch = {}
         self.bungie_manifest = None
         self.bungie_manifest_activity_definitions = None
         self.bungie_manifest_activity_mode_definitions = None
@@ -172,7 +175,7 @@ class Hawthorne:
                 action_registry[i]['last'] = now + wait
 
         # Start the loop.
-        self.log("Starting action ticker.")
+        self.log(":information_source: Starting action ticker.")
         self.keep_running = True
         while self.keep_running is True:
             if SIGTERM_RECEIVED:
@@ -180,7 +183,7 @@ class Hawthorne:
                 msg = "I need to feed Louis before he freaks out again, brb. [Heroku is probably restarting me.]"
                 self.announce(msg)
             if self.keep_running is False:
-                self.log('Hawthorne has been instructed to stop. Breaking out of tick loop.')
+                self.log(':information_source: Hawthorne has been instructed to stop. Breaking out of tick loop.')
                 break
             self.back_off_if_needed()
             time.sleep(1)  # We sleep by one second to prevent bot spam.
@@ -222,11 +225,11 @@ class Hawthorne:
                                 self.status_thread_ts = self.announce("Looks like Bungie.net is down for maintenance. :thread: for status updates.")
                                 self.back_pressure = MAINTENANCE_SLEEP_TIME
                                 break
-                            thread_ts = self.log(f"Non200ResponseException occurred when ticking on {action_call_name}.")
+                            thread_ts = self.log(f":warning: Non200ResponseException occurred when ticking on {action_call_name}.")
                             self.log_thread(thread_ts, f"```\n{e}\n```")
                             break
                         except Exception as e:
-                            thread_ts = self.log(f"Exception occurred when ticking on {action_call_name}.")
+                            thread_ts = self.log(f":warning: Exception occurred when ticking on {action_call_name}.")
                             self.log_thread(thread_ts, f"```\n{e}\n```")
                             break
                     action_registry[i]['last'] = now
@@ -248,9 +251,9 @@ class Hawthorne:
             return
 
         seconds = self.back_pressure
-        self.log(f'Backpressure signal received. Backing off for {seconds} seconds.')
+        self.log(f':warning: Backpressure signal received. Backing off for {seconds} seconds.')
         time.sleep(seconds)
-        self.log('Backoff ending.')
+        self.log(':warning: Backoff ending.')
 
         self.back_pressure = None
 
@@ -274,7 +277,7 @@ class Hawthorne:
 
         :return: 
         """
-        self.log("Caching Bungie.net manifests...")
+        self.log(":information_source: Caching Bungie.net manifests...")
         self.bungie_manifest = self.bungie.get_d2_manifest()
         self.bungie_manifest_activity_definitions = requests.get('https://www.bungie.net/{}'.format(
             self.bungie_manifest['jsonWorldComponentContentPaths']['en']['DestinyActivityDefinition'])
@@ -288,18 +291,18 @@ class Hawthorne:
 
         :return: 
         """
-        self.log("*Pre-caching player activities...*")
+        self.log(":information_source: *Pre-caching player activities...*")
         self.player_activity_cache = {}
         players_activities = self.get_players_activities()
         for activity in players_activities:
             cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
             if activity['active_character'] is None:
-                self.log(f"_Cache:_ No activity for {cache_key}")
+                self.log(f":information_source: _Cache:_ No activity for {cache_key}")
                 # self.player_activity_cache[cache_key] = None
                 continue
 
             msg = self.activity_message_for(activity)
-            self.log(f"_Cache:_ Activity for {cache_key}: {activity['activity']['hash']} `{msg}`")
+            self.log(f":information_source: _Cache:_ Activity for {cache_key}: {activity['activity']['hash']} `{msg}`")
             cache_val = activity["activity"]["hash"]
             self.player_activity_cache[cache_key] = [cache_val]
 
@@ -335,7 +338,7 @@ class Hawthorne:
             # Announce the activity.
             msg = self.activity_message_for(activity)
             self.announce(msg)
-            self.log(f"{cache_key}: {new_activity_hash}")
+            self.log(f":information_source: {cache_key}: {new_activity_hash}")
 
     """
     HELPER METHODS
@@ -347,55 +350,97 @@ class Hawthorne:
         :return: 
         """
         players_activities = []
-        channel_members = self.fetch_slack_channel_members(self.slack_channel_hawthorne)
+        slack_channel = self.slack_channel_hawthorne
+        if self.slack_channel_for_staging_with_real_users:
+            slack_channel = self.slack_channel_for_staging_with_real_users
+        channel_members = self.fetch_slack_channel_members(slack_channel)
+
         for member in channel_members:
-            # Ask for the user by gamertag and fetch their Bungie.net profile.
-            if 'destiny_psn_id' in member and member['destiny_psn_id']:
-                player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_PSN,
-                                                      display_name=member['destiny_psn_id'])
-            elif 'destiny_stm_id' in member and member['destiny_stm_id']:
-                player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_STEAM,
-                                                      display_name=member['destiny_stm_id'])
-            elif 'destiny_xbl_id' in member and member['destiny_xbl_id']:
-                player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_XBOX,
-                                                      display_name=member['destiny_xbl_id'])
-            else:
-                self.log(f"Player is a member of channel, but has no gamer tags: {member['slack_display_name']}")
+            try:
+                activity = self.get_activity_for_slack_user(member)
+                players_activities.append(activity)
+                self.unable_to_find_users_squelch[member['slack_id']] = False
+            except self.SlackUserHasNoGamerTags:
+                if not self.unable_to_find_users_squelch.get(member['slack_id']):
+                    self.log(f":warning: Player is a member of channel, but has no gamer tags: {member['slack_display_name']}")
+                self.unable_to_find_users_squelch[member['slack_id']] = True
                 continue
-            if len(player) == 0:
-                self.log(f"Unable to find characters for member: {member['slack_id']} {member['slack_display_name']}")
+            except self.SlackUserHasNoCharacters:
+                if not self.unable_to_find_users_squelch.get(member['slack_id']):
+                    self.log(f":warning: Unable to find characters for member: {member['slack_id']} {member['slack_display_name']}")
+                self.unable_to_find_users_squelch[member['slack_id']] = True
                 continue
-            player_name = player[0]['displayName']
-            membership_type = player[0]['membershipType']
-            membership_id = player[0]['membershipId']
-
-            # Get the "current" activity for the player and hydrate that with additional context.
-            activity, activity_mode, active_character, activity_timestamp = self.bungie.get_current_activity(membership_type, membership_id)
-            activity_name = None
-            if active_character is not None:
-                activity_name = ""
-                activity = self.bungie_manifest_activity_definitions[str(activity)]
-                activity_name += activity["displayProperties"]["name"]
-                try:
-                    activity_mode = self.bungie_manifest_activity_mode_definitions[str(activity_mode)]
-                    activity_name = "{} - {}".format(activity_mode["displayProperties"]["name"], activity_name)
-                except:
-                    pass
-                if activity["activityLightLevel"] > 0:
-                    activity_name = "{} (PL{})".format(activity_name, activity["activityLightLevel"])
-
-            players_activities.append({
-                'slack_member': member,
-                'destiny_player': player,
-                'destiny_player_name': player_name,
-                'destiny_membership_type': membership_type,
-                'destiny_membership_id': membership_id,
-                'activity': activity,
-                'activity_mode': activity_mode,
-                'active_character': active_character,
-                'activity_name': activity_name
-            })
         return players_activities
+
+    class SlackUserHasNoGamerTags(Exception):
+        """An exception that conveys a Slack member has no gamertags in their user profile."""
+        pass
+
+    class SlackUserHasNoCharacters(Exception):
+        """An exception that conveys a Slack member has no gamertags that could be found on their platform(s)."""
+        pass
+
+    def get_membership_for_slack_user(self, slack_user):
+        """Get a Bungie.net membership for a given Slack user. 
+        
+        :param slack_user: 
+        :return: 
+        """
+        # Ask for the user by gamertag and fetch their Bungie.net profile.
+        if 'destiny_psn_id' in slack_user and slack_user['destiny_psn_id']:
+            player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_PSN,
+                                                  display_name=slack_user['destiny_psn_id'])
+        elif 'destiny_stm_id' in slack_user and slack_user['destiny_stm_id']:
+            player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_STEAM,
+                                                  display_name=slack_user['destiny_stm_id'])
+        elif 'destiny_xbl_id' in slack_user and slack_user['destiny_xbl_id']:
+            player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_XBOX,
+                                                  display_name=slack_user['destiny_xbl_id'])
+        else:
+            raise self.SlackUserHasNoGamerTags()
+        if len(player) == 0:
+            raise self.SlackUserHasNoCharacters()
+        player_name = player[0]['displayName']
+        membership_type = player[0]['membershipType']
+        membership_id = player[0]['membershipId']
+
+        return player, player_name, membership_type, membership_id
+
+    def get_activity_for_slack_user(self, slack_user):
+        """Get the latest activity for a Slack user based on their user profile gamertags.
+        
+        :param slack_user: dict
+        :return: 
+        """
+        player, player_name, membership_type, membership_id = self.get_membership_for_slack_user(slack_user)
+
+        # Get the "current" activity for the player and hydrate that with additional context.
+        activity, activity_mode, active_character, activity_timestamp = self.bungie.get_current_activity(
+            membership_type, membership_id)
+        activity_name = None
+        if active_character is not None:
+            activity_name = ""
+            activity = self.bungie_manifest_activity_definitions[str(activity)]
+            activity_name += activity["displayProperties"]["name"]
+            try:
+                activity_mode = self.bungie_manifest_activity_mode_definitions[str(activity_mode)]
+                activity_name = "{} - {}".format(activity_mode["displayProperties"]["name"], activity_name)
+            except:
+                pass
+            if activity["activityLightLevel"] > 0:
+                activity_name = "{} (PL{})".format(activity_name, activity["activityLightLevel"])
+
+        return {
+            'slack_member': slack_user,
+            'destiny_player': player,
+            'destiny_player_name': player_name,
+            'destiny_membership_type': membership_type,
+            'destiny_membership_id': membership_id,
+            'activity': activity,
+            'activity_mode': activity_mode,
+            'active_character': active_character,
+            'activity_name': activity_name
+        }
 
     @staticmethod
     def activity_message_for(activity):
@@ -432,6 +477,8 @@ class Hawthorne:
             emoji = ':dungeon:'
         elif activity_name.startswith('Story - The Shattered Throne'):
             emoji = ':dungeon:'
+        elif activity_name.startswith('Crucible'):
+            emoji = ':crucible:'
         return f':hawthorne: {display_name} is now playing {emoji} *{activity_name}*'
 
     def fetch_slack_channel_members(self, slack_channel_id):
@@ -514,6 +561,7 @@ def command_line_main():
     slack_oauth_client_secret = required_environment_variable('SLACK_OAUTH_CLIENT_SECRET')
     slack_oauth_token = optional_environment_variable('SLACK_OAUTH_TOKEN')
     slack_channel_hawthorne = required_environment_variable('SLACK_CHANNEL_HAWTHORNE')
+    slack_channel_for_staging_with_real_users = optional_environment_variable('SLACK_CHANNEL_FOR_STAGING_WITH_REAL_USERS')
     slack_channel_log = required_environment_variable('SLACK_CHANNEL_LOG')
     slack_bot_user_id = required_environment_variable('SLACK_BOT_USER_ID')
     bungie_api_token = required_environment_variable('BUNGIE_API_TOKEN')
@@ -571,7 +619,8 @@ def command_line_main():
         slack_channel_log,
         slack_bot_user_id,
         slack,
-        bungie
+        bungie,
+        slack_channel_for_staging_with_real_users=slack_channel_for_staging_with_real_users
     )
     signal.signal(signal.SIGTERM, receive_signal)
     print("Starting Hawthorne.")
