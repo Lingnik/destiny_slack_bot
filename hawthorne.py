@@ -28,6 +28,12 @@ SLACK_FIELD_PSN = 'Xf0DB6LM46'
 SLACK_FIELD_XBL = 'XfMDV8FH3K'
 SLACK_FIELD_STM = 'XfMKSQK1S8'
 
+CLASSES = {
+    '2271682572': {'name': 'Warlock', 'emoji': ':warlock:'},
+    '3655393761': {'name': 'Titan', 'emoji': ':titan:'},
+    '671679327': {'name': 'Hunter', 'emoji': ':hunter:'}
+}
+
 MAINTENANCE_SLEEP_TIME = 300
 SIGTERM_RECEIVED = False
 pp = pprint.PrettyPrinter(indent=4)
@@ -207,7 +213,6 @@ class Hawthorne:
                             action_call_name = action_call.__name__
                             self.debug(f"Ticking on {action_call_name}. [DEBUG]")
                             action_call()
-                            raise Exception()
                         else:
                             try:
                                 action_call_name = action_call.__name__
@@ -470,6 +475,8 @@ class Hawthorne:
         activity, activity_mode, active_character, activity_timestamp = self.bungie.get_current_activity(
             membership_type, membership_id)
         activity_name = None
+        character = None
+        character_class = None
         if active_character is not None:
             activity_name = ""
             activity = self.bungie_manifest_activity_definitions[str(activity)]
@@ -481,33 +488,33 @@ class Hawthorne:
                 pass
             if activity["activityLightLevel"] > 0:
                 activity_name = "{} (PL{})".format(activity_name, activity["activityLightLevel"])
+            character = self.bungie.get_d2_character(membership_type, membership_id, active_character, ['200'])
+            character_class = character.get('character', {}).get('data', {}).get('classHash', 0)
+            character_class = CLASSES.get(str(character_class))
 
-        return {
+
+        return_activity = {
             'slack_member': slack_user,
             'destiny_player': player,
             'destiny_player_name': player_name,
             'destiny_membership_type': membership_type,
             'destiny_membership_id': membership_id,
+            'destiny_character': character,
+            'destiny_character_class': character_class,
             'activity': activity,
             'activity_mode': activity_mode,
             'active_character': active_character,
             'activity_name': activity_name
         }
+        return return_activity
 
     @staticmethod
-    def activity_message_for(activity):
-        """Return a Slack-formatted message (raw, not blocks) representing the current activity.
+    def activity_emoji_for(activity_name):
+        """Return an emoji for a particular activity name.
         
-        :param activity: 
+        :param activity_name: 
         :return: 
         """
-        slack_display_name = activity["slack_member"]["slack_display_name"]
-        destiny_player_name = activity["destiny_player_name"]
-        activity_name = activity["activity_name"]
-        if not slack_display_name:
-            display_name = f'*{destiny_player_name}*'
-        else:
-            display_name = f'*{destiny_player_name}* (@{slack_display_name})'
         emoji = ""
         if activity_name.startswith('Explore - '):
             emoji = ':fireteam:'
@@ -531,7 +538,31 @@ class Hawthorne:
             emoji = ':dungeon:'
         elif activity_name.startswith('Crucible'):
             emoji = ':crucible:'
-        return f':hawthorne: {display_name} is now playing {emoji} *{activity_name}*'
+        elif activity_name.startswith('Rumble'):
+            emoji = ':crucible:'
+        return emoji
+
+    def activity_message_for(self, activity):
+        """Return a Slack-formatted message (raw, not blocks) representing the current activity.
+        
+        :param activity: 
+        :return: 
+        """
+        slack_display_name = activity["slack_member"]["slack_display_name"]
+        destiny_player_name = activity["destiny_player_name"]
+        character_class = activity["destiny_character_class"]
+        if character_class:
+            character_class_emoji = character_class['emoji']
+        else:
+            character_class_emoji = ""
+        activity_name = activity["activity_name"]
+        activity_emoji = self.activity_emoji_for(activity_name)
+        if not slack_display_name:
+            display_name = f'*{destiny_player_name}*'
+        else:
+            display_name = f'*{destiny_player_name}* (@{slack_display_name})'
+
+        return f':hawthorne: {display_name} {character_class_emoji} is now playing {activity_emoji} *{activity_name}*'
 
     def fetch_slack_channel_members(self, slack_channel_id):
         """Fetch all the Slack members for a channel and their various Destiny usernames.
