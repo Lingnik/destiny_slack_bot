@@ -8,6 +8,7 @@ import shlex
 import datetime
 import time
 import signal
+import traceback
 
 import requests
 
@@ -29,7 +30,6 @@ SLACK_FIELD_STM = 'XfMKSQK1S8'
 
 MAINTENANCE_SLEEP_TIME = 300
 SIGTERM_RECEIVED = False
-DEBUG = bool(os.environ.get('HAWTHORNE_DEBUG', False))
 pp = pprint.PrettyPrinter(indent=4)
 
 
@@ -88,7 +88,7 @@ class Hawthorne:
         :return: 
         """
         now = datetime.datetime.now(datetime.timezone.utc)
-        print(f"{now} SLACK: {message}")#
+        print(f"{now} SLACK: {message}")
         return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_hawthorne, text=message).get('ts')
 
     def log(self, message):
@@ -130,7 +130,7 @@ class Hawthorne:
         :param message: 
         :return: 
         """
-        if DEBUG:
+        if bool(os.environ.get('HAWTHORNE_DEBUG', False)):
             now = datetime.datetime.now(datetime.timezone.utc)
             print(f"{now} DEBUG: {message}")
 
@@ -150,94 +150,100 @@ class Hawthorne:
         
         :return: 
         """
-        if self.keep_running:
-            raise Exception("Bot instance is already running.")
+        try:
+            if self.keep_running:
+                raise Exception("Bot instance is already running.")
 
-        # This is a simple loop-based ticker. Every tick of the loop, we execute zero or one actions from the registry.
-        # It is not guaranteed to call from the registry at the exactly-correct time: time will drift if call runtime
-        # exceeds the frequency or if another method call results in an execution time being missed, but it will attempt
-        # to execute things as soon as possible after they are scheduled to be run.
+            # This is a simple loop-based ticker. Every tick of the loop, we execute zero or one actions from the registry.
+            # It is not guaranteed to call from the registry at the exactly-correct time: time will drift if call runtime
+            # exceeds the frequency or if another method call results in an execution time being missed, but it will attempt
+            # to execute things as soon as possible after they are scheduled to be run.
 
-        self.announce("I'm back! [Bot started.]")
+            self.announce("I'm back! [Bot started.]")
 
-        # Register actions that the loop will tick against.
-        action_registry = [
-            {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0, 'calls-api': False},
-            {'method': self.cache_bungie_manifests, 'frequency': 86400, 'last': 0, 'wait': 0, 'calls-api': True},
-            {'method': self.cache_player_activities, 'frequency': None, 'last': 0, 'wait': 0, 'calls-api': True},
-            {'method': self.report_player_activity, 'frequency': 30, 'last': 0, 'wait': 0, 'calls-api': True},
-            {'method': self.dump_slack_history, 'frequency': 86400, 'last': 0, 'wait': 86400, 'calls-api': False},
-        ]
-        # Enqueue future things that we're waiting on by setting their 'last' to the future.
-        for i, action in enumerate(action_registry):
-            wait = action['wait']
-            if wait > 0:
-                now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-                action_registry[i]['last'] = now + wait
-
-        # Start the loop.
-        self.log(":information_source: Starting action ticker.")
-        self.keep_running = True
-        while self.keep_running is True:
-            if SIGTERM_RECEIVED:
-                self.keep_running = False
-                msg = "I need to feed Louis before he freaks out again, brb. [Heroku is probably restarting me.]"
-                self.announce(msg)
-            if self.keep_running is False:
-                self.log(':information_source: Hawthorne has been instructed to stop. Breaking out of tick loop.')
-                break
-            self.back_off_if_needed()
-            time.sleep(1)  # We sleep by one second to prevent bot spam.
-            self.debug('TICK')
-
-            # Try to find an action to call, call it, then break as soon as we call one action.
+            # Register actions that the loop will tick against.
+            action_registry = [
+                {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0, 'calls-api': False},
+                {'method': self.cache_bungie_manifests, 'frequency': 86400, 'last': 0, 'wait': 0, 'calls-api': True},
+                {'method': self.cache_player_activities, 'frequency': None, 'last': 0, 'wait': 0, 'calls-api': True},
+                {'method': self.report_player_activity, 'frequency': 30, 'last': 0, 'wait': 0, 'calls-api': True},
+                {'method': self.dump_slack_history, 'frequency': 86400, 'last': 0, 'wait': 86400, 'calls-api': False},
+            ]
+            # Enqueue future things that we're waiting on by setting their 'last' to the future.
             for i, action in enumerate(action_registry):
-                now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-                last = action['last']
-                frequency = action['frequency']
-                # Skip actions that don't repeat (their frequency is None) after they've run once:
-                if frequency is None:
-                    frequency = 0
-                    if last > 0:
-                        continue
-                if last + frequency < now:
-                    action_call = action['method']
-                    if DEBUG:
-                        action_call_name = action_call.__name__
-                        self.debug(f"Ticking on {action_call_name}. [DEBUG]")
-                        action_call()
-                    else:
-                        try:
+                wait = action['wait']
+                if wait > 0:
+                    now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+                    action_registry[i]['last'] = now + wait
+
+            # Start the loop.
+            self.log(":information_source: Starting action ticker.")
+            self.keep_running = True
+            while self.keep_running is True:
+                if SIGTERM_RECEIVED:
+                    self.keep_running = False
+                    msg = "I need to feed Louis before he freaks out again, brb. [Heroku is probably restarting me.]"
+                    self.announce(msg)
+                if self.keep_running is False:
+                    self.log(':information_source: Hawthorne has been instructed to stop. Breaking out of tick loop.')
+                    break
+                self.back_off_if_needed()
+                time.sleep(1)  # We sleep by one second to prevent bot spam.
+                self.debug('TICK')
+
+                # Try to find an action to call, call it, then break as soon as we call one action.
+                for i, action in enumerate(action_registry):
+                    now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+                    last = action['last']
+                    frequency = action['frequency']
+                    # Skip actions that don't repeat (their frequency is None) after they've run once:
+                    if frequency is None:
+                        frequency = 0
+                        if last > 0:
+                            continue
+                    if last + frequency < now:
+                        action_call = action['method']
+                        if bool(os.environ.get('HAWTHORNE_DEBUG', False)):
                             action_call_name = action_call.__name__
-                            self.debug(f"Ticking on {action_call_name}.")
+                            self.debug(f"Ticking on {action_call_name}. [DEBUG]")
                             action_call()
-                            if self.status_thread_ts:
-                                self.status_thread_ts = None
-                                self.status_log_thread_ts = None
-                        except Non200ResponseException as e:
-                            response_data = json.loads(e.response.text)
-                            if response_data.get('ErrorStatus') == 'SystemDisabled':
+                            raise Exception()
+                        else:
+                            try:
+                                action_call_name = action_call.__name__
+                                self.debug(f"Ticking on {action_call_name}.")
+                                action_call()
                                 if self.status_thread_ts:
-                                    self.log_thread(self.status_log_thread_ts, f'Maintenance message: `{e.response.text}`')
-                                    self.log_thread(self.status_thread_ts, 'Bungie.net is still down for maintenance. Will check again in 5 minutes.')
+                                    self.status_thread_ts = None
+                                    self.status_log_thread_ts = None
+                            except Non200ResponseException as e:
+                                response_data = json.loads(e.response.text)
+                                if response_data.get('ErrorStatus') == 'SystemDisabled':
+                                    if self.status_thread_ts:
+                                        self.log_thread(self.status_log_thread_ts, f'Maintenance message: `{e.response.text}`')
+                                        self.log_thread(self.status_thread_ts, 'Bungie.net is still down for maintenance. Will check again in 5 minutes.')
+                                        self.back_pressure = MAINTENANCE_SLEEP_TIME
+                                        break
+                                    self.status_log_thread_ts = self.log(f'Maintenance message: `{e.response.text}`')
+                                    self.status_thread_ts = self.announce("Looks like Bungie.net is down for maintenance. :thread: for status updates.")
                                     self.back_pressure = MAINTENANCE_SLEEP_TIME
                                     break
-                                self.status_log_thread_ts = self.log(f'Maintenance message: `{e.response.text}`')
-                                self.status_thread_ts = self.announce("Looks like Bungie.net is down for maintenance. :thread: for status updates.")
-                                self.back_pressure = MAINTENANCE_SLEEP_TIME
+                                thread_ts = self.log(f":warning: Non200ResponseException occurred when ticking on {action_call_name}.")
+                                self.log_thread(thread_ts, f"```\n{e}\n```")
                                 break
-                            thread_ts = self.log(f":warning: Non200ResponseException occurred when ticking on {action_call_name}.")
-                            self.log_thread(thread_ts, f"```\n{e}\n```")
-                            break
-                        except Exception as e:
-                            thread_ts = self.log(f":warning: Exception occurred when ticking on {action_call_name}.")
-                            self.log_thread(thread_ts, f"```\n{e}\n```")
-                            break
-                    action_registry[i]['last'] = now
-                    break
+                            except Exception as e:
+                                thread_ts = self.log(f":warning: Exception occurred when ticking on {action_call_name}.")
+                                self.log_thread(thread_ts, f"```\n{e}\n```")
+                                break
+                        action_registry[i]['last'] = now
+                        break
 
-            # END TICK
-            self.debug('TOCK')
+                # END TICK
+                self.debug('TOCK')
+        except Exception as e:
+            exc = traceback.format_exc()
+            ts = self.log(f":big-red-siren: Exception occurred: {e}")
+            self.log_thread(ts, f"```\n{exc}\n```")
 
     """
     TICKER METHODS
