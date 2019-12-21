@@ -10,6 +10,7 @@ import time
 import signal
 import traceback
 
+import redis
 import requests
 
 from slack_wrapper import SlackApi
@@ -56,6 +57,7 @@ class Hawthorne:
             slack_bot_user_id,
             slack,
             bungie,
+            redis,
             slack_channel_for_staging_with_real_users=None
     ):
         self.slack_api_token = slack_api_token
@@ -71,6 +73,7 @@ class Hawthorne:
         self.slack_bot_user_id = slack_bot_user_id
         self.slack = slack  # type: SlackApi
         self.bungie = bungie  # type: BungieApi
+        self.redis = redis
 
         self.unable_to_find_users_squelch = {}
         self.slack_seen_cache = {}
@@ -82,63 +85,6 @@ class Hawthorne:
         self.back_pressure = None
         self.status_thread_ts = None
         self.status_log_thread_ts = None
-
-    """
-    LOGGERS
-    """
-
-    def announce(self, message):
-        """Announce a message to the default Slack channel as the bot user.
-        
-        :param message: 
-        :return: 
-        """
-        now = datetime.datetime.now(datetime.timezone.utc)
-        print(f"{now} SLACK: {message}")
-        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_hawthorne, text=message).get('ts')
-
-    def log(self, message):
-        """Log something pertinent to the Slack log channel (and the console).
-        
-        :param message: 
-        :return: 
-        """
-        now = datetime.datetime.now(datetime.timezone.utc)
-        msg = f"{now} LOG: {message}"
-        print(msg)
-        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, text=msg).get('ts')
-
-    def log_thread(self, thread_ts, message):
-        """Log a followup to a thread.
-        
-        :param thread_ts: 
-        :param message: 
-        :return: 
-        """
-        print(message)
-        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, thread_ts=thread_ts, text=message)
-
-    @staticmethod
-    def log_local(message):
-        """Log something pertinent to the console (only).
-
-        :param message: 
-        :return: 
-        """
-        now = datetime.datetime.now(datetime.timezone.utc)
-        msg = f"{now} LOG_LOCAL: {message}"
-        print(msg)
-
-    @staticmethod
-    def debug(message):
-        """Emit debugging information, when wanted, to the console.
-        
-        :param message: 
-        :return: 
-        """
-        if bool(os.environ.get('HAWTHORNE_DEBUG', False)):
-            now = datetime.datetime.now(datetime.timezone.utc)
-            print(f"{now} DEBUG: {message}")
 
     """
     TICKER LOOP
@@ -153,7 +99,7 @@ class Hawthorne:
 
     def start(self):
         """Start the bot running.
-        
+
         :return: 
         """
         try:
@@ -225,19 +171,24 @@ class Hawthorne:
                                 response_data = json.loads(e.response.text)
                                 if response_data.get('ErrorStatus') == 'SystemDisabled':
                                     if self.status_thread_ts:
-                                        self.log_thread(self.status_log_thread_ts, f'Maintenance message: `{e.response.text}`')
-                                        self.log_thread(self.status_thread_ts, 'Bungie.net is still down for maintenance. Will check again in 5 minutes.')
+                                        self.log_thread(self.status_log_thread_ts,
+                                                        f'Maintenance message: `{e.response.text}`')
+                                        self.log_thread(self.status_thread_ts,
+                                                        'Bungie.net is still down for maintenance. Will check again in 5 minutes.')
                                         self.back_pressure = MAINTENANCE_SLEEP_TIME
                                         break
                                     self.status_log_thread_ts = self.log(f'Maintenance message: `{e.response.text}`')
-                                    self.status_thread_ts = self.announce("Looks like Bungie.net is down for maintenance. :thread: for status updates.")
+                                    self.status_thread_ts = self.announce(
+                                        "Looks like Bungie.net is down for maintenance. :thread: for status updates.")
                                     self.back_pressure = MAINTENANCE_SLEEP_TIME
                                     break
-                                thread_ts = self.log(f":warning: Non200ResponseException occurred when ticking on {action_call_name}.")
+                                thread_ts = self.log(
+                                    f":warning: Non200ResponseException occurred when ticking on {action_call_name}.")
                                 self.log_thread(thread_ts, f"```\n{e}\n```")
                                 break
                             except Exception as e:
-                                thread_ts = self.log(f":warning: Exception occurred when ticking on {action_call_name}.")
+                                thread_ts = self.log(
+                                    f":warning: Exception occurred when ticking on {action_call_name}.")
                                 self.log_thread(thread_ts, f"```\n{e}\n```")
                                 break
                         action_registry[i]['last'] = now
@@ -249,6 +200,63 @@ class Hawthorne:
             exc = traceback.format_exc()
             ts = self.log(f":big-red-siren: Exception occurred: {e}")
             self.log_thread(ts, f"```\n{exc}\n```")
+
+    """
+    LOGGERS
+    """
+
+    def announce(self, message):
+        """Announce a message to the default Slack channel as the bot user.
+        
+        :param message: 
+        :return: 
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        print(f"{now} SLACK: {message}")
+        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_hawthorne, text=message).get('ts')
+
+    def log(self, message):
+        """Log something pertinent to the Slack log channel (and the console).
+        
+        :param message: 
+        :return: 
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        msg = f"{now} LOG: {message}"
+        print(msg)
+        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, text=msg).get('ts')
+
+    def log_thread(self, thread_ts, message):
+        """Log a followup to a thread.
+        
+        :param thread_ts: 
+        :param message: 
+        :return: 
+        """
+        print(message)
+        return self.slack.slack_as_bot.chat_postMessage(channel=self.slack_channel_log, thread_ts=thread_ts, text=message)
+
+    @staticmethod
+    def log_local(message):
+        """Log something pertinent to the console (only).
+
+        :param message: 
+        :return: 
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        msg = f"{now} LOG_LOCAL: {message}"
+        print(msg)
+
+    @staticmethod
+    def debug(message):
+        """Emit debugging information, when wanted, to the console.
+        
+        :param message: 
+        :return: 
+        """
+        if bool(os.environ.get('HAWTHORNE_DEBUG', False)):
+            now = datetime.datetime.now(datetime.timezone.utc)
+            print(f"{now} DEBUG: {message}")
 
     """
     TICKER METHODS
@@ -540,6 +548,8 @@ class Hawthorne:
             emoji = ':crucible:'
         elif activity_name.startswith('Rumble'):
             emoji = ':crucible:'
+        elif activity_name.startswith('Story -'):
+            emoji = ':fireteam:'
         return emoji
 
     def activity_message_for(self, activity):
@@ -574,6 +584,14 @@ class Hawthorne:
         raw_members = self.slack.slack_as_user.channels_info(channel=slack_channel_id).data['channel'].get(
             'members')
         for member_id in raw_members:
+            mute_timestamp_expiration = self.redis.get(f'mute.{member_id}')
+            if mute_timestamp_expiration:
+                now = datetime.datetime.now().timestamp()
+                if now > mute_timestamp_expiration:
+                    self.redis.delete(f'mute.{member_id}')
+
+                else:
+                    continue
             member = self.slack.slack_as_user.users_profile_get(user=member_id)
             if 'bot_id' in member['profile']:
                 continue
@@ -651,6 +669,7 @@ def command_line_main():
     bungie_oauth_token = optional_environment_variable('BUNGIE_OAUTH_TOKEN')
     if bungie_oauth_token:
         bungie_oauth_token = json.loads(bungie_oauth_token)
+    redis_url = required_environment_variable('REDIS_URL')
 
     # Fetch command-line arguments.
     # ---
@@ -689,6 +708,9 @@ def command_line_main():
             print("Unable to proceed, not authenticated with valid credentials.")
             return
 
+    # Authenticate with Redis
+    my_redis = redis.from_url(redis_url)
+
     # Start the bot.
     bot = Hawthorne(
         slack_api_token,
@@ -703,6 +725,7 @@ def command_line_main():
         slack_bot_user_id,
         slack,
         bungie,
+        my_redis,
         slack_channel_for_staging_with_real_users=slack_channel_for_staging_with_real_users
     )
     signal.signal(signal.SIGTERM, receive_signal)
