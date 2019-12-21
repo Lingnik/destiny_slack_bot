@@ -4,6 +4,7 @@ import json
 from django.shortcuts import render
 from django.http import HttpResponse, HttpResponseRedirect
 from django.template import loader
+from django.views.decorators.csrf import csrf_exempt
 
 from bungie_wrapper import BungieApi
 from utilities import logger
@@ -56,6 +57,7 @@ def oauth_callback(request):
     }
     return HttpResponse(template.render(context, request))
 
+@csrf_exempt
 def bot_slash_command(request):
     """
     
@@ -63,13 +65,11 @@ def bot_slash_command(request):
     :return: 
     """
     response_url = str(request.POST.get('response_url'))
-
-    user_id = str(request.POST.get('user_id'))
-
     channel_id = str(request.POST.get('channel_id'))
-
+    user_id = str(request.POST.get('user_id'))
     command = str(request.POST.get('text'))
     command = command.strip()
+    print(command)
 
     print(f"<@{user_id}> ran a command in <#{channel_id}>: /hawthorne {command}")
 
@@ -85,4 +85,6 @@ def bot_slash_command(request):
         return HttpResponse(status=500, content='Not implemented.')
     if command.startswith('mute '):
         return HttpResponse(status=500, content='Not implemented.')
-    pass
+    return HttpResponse(
+        ("I couldn't understand your command. Try `/hawthorne help`.\n"
+         f"Your command: `/hawthorne {command}`"))
