@@ -98,7 +98,7 @@ def bot_slash_command(request):
                 'I was unable to recognize the number you provided for hours.'
                 ' You provided `{command.split(' ')[1]}` which does not match the integer format `8h` or `8`.'
             ))
-        timestamp = datetime.datetime.now().timestamp() + (hours * 60 * 60)
+        timestamp = datetime.datetime.now().timestamp() + (hours * 60.0 * 60.0)
         r.set(f'mute.{user_id}', timestamp)
         return HttpResponse(f'I will hide your activity for {hours} hours.')
     return HttpResponse(

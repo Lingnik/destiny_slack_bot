@@ -586,10 +586,10 @@ class Hawthorne:
         for member_id in raw_members:
             mute_timestamp_expiration = self.redis.get(f'mute.{member_id}')
             if mute_timestamp_expiration:
+                mute_timestamp_expiration = float(mute_timestamp_expiration)
                 now = datetime.datetime.now().timestamp()
                 if now > mute_timestamp_expiration:
                     self.redis.delete(f'mute.{member_id}')
-
                 else:
                     continue
             member = self.slack.slack_as_user.users_profile_get(user=member_id)
