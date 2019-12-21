@@ -1,5 +1,9 @@
 import os
 import json
+import redis
+import datetime
+
+r = redis.from_url(os.environ.get("REDIS_URL"))
 
 from django.shortcuts import render
 from django.http import HttpResponse, HttpResponseRedirect
@@ -82,9 +86,21 @@ def bot_slash_command(request):
         }
         return HttpResponse(template.render(context, request))
     if command == 'unmute':
-        return HttpResponse(status=500, content='Not implemented.')
+        r.delete(f'mute.{user_id}')
+        return HttpResponse('Your status will appear in #hawthorne again.')
     if command.startswith('mute '):
-        return HttpResponse(status=500, content='Not implemented.')
+        hours = command.split(' ')[1]
+        hours = hours.strip('h')
+        try:
+            hours = int(hours)
+        except Exception as e:
+            return HttpResponse(status=500, content=(
+                'I was unable to recognize the number you provided for hours.'
+                ' You provided `{command.split(' ')[1]}` which does not match the integer format `8h` or `8`.'
+            ))
+        timestamp = datetime.datetime.now().timestamp() + (hours * 60 * 60)
+        r.set(f'mute.{user_id}', timestamp)
+        return HttpResponse(f'I will hide your activity for {hours} hours.')
     return HttpResponse(
         ("I couldn't understand your command. Try `/hawthorne help`.\n"
          f"Your command: `/hawthorne {command}`"))

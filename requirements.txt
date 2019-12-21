@@ -4,3 +4,4 @@ gunicorn
 django-heroku
 slacker
 slackclient
+redis
