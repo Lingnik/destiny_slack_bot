@@ -43,7 +43,7 @@ def oauth_callback(request):
         bungie_client.get_d2_profile(
             membership.get('membershipId'),
             membership.get('membershipType'),
-            bungie_client.COMPONENTS_ALL
+            ['100']
         )
         memberships.append(membership)
 
@@ -55,3 +55,34 @@ def oauth_callback(request):
         'memberships': json.dumps(memberships, indent=4),
     }
     return HttpResponse(template.render(context, request))
+
+def bot_slash_command(request):
+    """
+    
+    :param request: 
+    :return: 
+    """
+    response_url = str(request.POST.get('response_url'))
+
+    user_id = str(request.POST.get('user_id'))
+
+    channel_id = str(request.POST.get('channel_id'))
+
+    command = str(request.POST.get('text'))
+    command = command.strip()
+
+    print(f"<@{user_id}> ran a command in <#{channel_id}>: /hawthorne {command}")
+
+    if command == 'help':
+        template = loader.get_template('checklist/bot_slash_help.txt')
+        context = {
+            'response_url': response_url,
+            'user_id': user_id,
+            'channel_id': channel_id,
+        }
+        return HttpResponse(template.render(context, request))
+    if command == 'unmute':
+        return HttpResponse(status=500, content='Not implemented.')
+    if command.startswith('mute '):
+        return HttpResponse(status=500, content='Not implemented.')
+    pass

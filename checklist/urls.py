@@ -21,5 +21,6 @@ from checklist import views
 
 urlpatterns = [
     path('', views.home, name='home'),
+    path('bot-slash-command', views.bot_slash_command, name='bot_slash_command'),
     path('auth', views.oauth_callback, name='oauth_callback')
 ]

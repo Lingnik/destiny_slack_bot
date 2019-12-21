@@ -1,0 +1,16 @@
+:wave: Hi! I'm Hawthorne, and I help people play together. In the Tower, I bring clanmembers together to help them get
+more out of their experience. Here on this Slack, I provide several services to bring the whole Slack together.
+
+*#hawthorne Channel*
+The #hawthorne channel is where I provide realtime updates on what our members are up to.
+
+<https://destiny-disco.slack.com/archives/CR0NPJWBT/p1576384243009300|Here are some instructions.>
+
+*`/hawthorne` Command*
+The command you're using now lets you customize the things I'll do for you (or not):
+
+• `/hawthorne help` - This message.
+• `/hawthorne hide 2h` - Prevents me from sharing your activity in #hawthorne for the specified time. (Time is expressed in hours, e.g. `3h`.)
+• `/hawthorne unhide` - Cancels your request to prevent me from sharing your activity in #hawthorne.
+
+That's all I can help with for now. If you have other feedback, please let <@U5KLLJB6K> know!
