@@ -168,6 +168,7 @@ class Hawthorne:
                                     self.status_thread_ts = None
                                     self.status_log_thread_ts = None
                             except Non200ResponseException as e:
+                                exc = traceback.format_exc()
                                 response_data = json.loads(e.response.text)
                                 if response_data.get('ErrorStatus') == 'SystemDisabled':
                                     if self.status_thread_ts:
@@ -182,14 +183,13 @@ class Hawthorne:
                                         "Looks like Bungie.net is down for maintenance. :thread: for status updates.")
                                     self.back_pressure = MAINTENANCE_SLEEP_TIME
                                     break
-                                thread_ts = self.log(
-                                    f":warning: Non200ResponseException occurred when ticking on {action_call_name}.")
-                                self.log_thread(thread_ts, f"```\n{e}\n```")
+                                ts = self.log(f":warning: Non200ResponseException occurred when ticking on {action_call_name}: `{e}`")
+                                self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
                                 break
                             except Exception as e:
-                                thread_ts = self.log(
-                                    f":warning: Exception occurred when ticking on {action_call_name}.")
-                                self.log_thread(thread_ts, f"```\n{e}\n```")
+                                exc = traceback.format_exc()
+                                ts = self.log(f":warning: Exception occurred when ticking on {action_call_name}: `{e}`")
+                                self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
                                 break
                         action_registry[i]['last'] = now
                         break
@@ -198,8 +198,8 @@ class Hawthorne:
                 self.debug('TOCK')
         except Exception as e:
             exc = traceback.format_exc()
-            ts = self.log(f":big-red-siren: Exception occurred: {e}")
-            self.log_thread(ts, f"```\n{exc}\n```")
+            ts = self.log(f":big-red-siren: Exception occurred: `{e}`")
+            self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
 
     """
     LOGGERS
