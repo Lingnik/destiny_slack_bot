@@ -87,7 +87,7 @@ class Hawthorne:
         self.status_log_thread_ts = None
 
     @staticmethod
-    def instantiate_from_environment():
+    def instantiate_from_environment(cache_manifests=False):
         """Instantiate a Hawthorne() from environment variables.
 
             :return: 
@@ -167,6 +167,8 @@ class Hawthorne:
             my_redis,
             slack_channel_for_staging_with_real_users=slack_channel_for_staging_with_real_users
         )
+        if cache_manifests:
+            bot.cache_bungie_manifests()
         return bot
 
     """
