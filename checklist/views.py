@@ -73,7 +73,6 @@ def bot_slash_command(request):
     user_id = str(request.POST.get('user_id'))
     command = str(request.POST.get('text'))
     command = command.strip()
-    print(command)
 
     print(f"<@{user_id}> ran a command in <#{channel_id}>: /hawthorne {command}")
 

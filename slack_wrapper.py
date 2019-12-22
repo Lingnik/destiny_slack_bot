@@ -2,15 +2,23 @@
 
 Mostly to make oauth and client persistence easier.
 """
+import time
+
 from urllib import parse as urllib_parse
 from slacker import Slacker
 from slack import WebClient
+from requests.exceptions import HTTPError, ReadTimeout
 
 
 class SlackApi:
     """A lean Python Slack API wrapper, using slacker and the official Slack API under the hood."""
-    def __init__(self, oauth_client_id=None, oauth_client_secret=None, oauth_scope=None, incoming_webhook_url=None,
-                 oauth_user_token=None, oauth_bot_token=None):
+    def __init__(self,
+                 oauth_client_id=None,
+                 oauth_client_secret=None,
+                 oauth_scope=None,
+                 incoming_webhook_url=None,
+                 oauth_user_token=None,
+                 oauth_bot_token=None):
         self.incoming_webhook_url = incoming_webhook_url
 
         self.oauth_client_id = oauth_client_id
@@ -33,7 +41,7 @@ class SlackApi:
         """
         auth_url = f"https://slack.com/oauth/authorize?scope={ self.oauth_scope }"
         auth_url += f"&client_id={ self.oauth_client_id }"
-        redirect_uri = urllib_parse.quote('https://hawthorne-slack-bot.herokuapp.com/slack_auth', safe='')
+        redirect_uri = urllib_parse.quote('https://hawthorne-bot.herokuapp.com/slack_auth', safe='')
         auth_url += f"&redirect_uri={ redirect_uri }"
         return auth_url
 
@@ -104,3 +112,64 @@ class SlackApi:
         :return: 
         """
         return self.post_message_raw({"text": message})
+
+    @staticmethod
+    def get_history(client_obj, channel_id):
+        """Get all of the history for a Slack channel
+        
+        :param client_obj: 
+        :param channel_id: 
+        :return: 
+        """
+        messages = []
+        last_timestamp = None
+
+        while True:
+            print('.', end='', flush=True)
+            try:
+                if last_timestamp:
+                    # Subsequent fetches.
+                    response = client_obj.channels_history(
+                        channel=channel_id,
+                        latest=last_timestamp,
+                        oldest=0,
+                        count=1000
+                    ).data
+                else:
+                    # First fetch.
+                    response = client_obj.channels_history(
+                        channel=channel_id,
+                        count=1000
+                    ).data
+            except HTTPError as e:
+                print('')
+                print(e)
+                print('Status Code: {}'.format(e.response.status_code))
+                print('Content: {}'.format(e.response.content))
+                if e.response.status_code == 429:
+                    retry_after = int(e.response.headers.get('Retry-After', '33'))
+                    print("Backing off for {} seconds.".format(retry_after))
+                    time.sleep(retry_after)
+                    continue
+            except ReadTimeout as e:
+                print('')
+                print(e)
+                print("Backing off for 30 seconds.")
+                time.sleep(30)
+                continue
+            except Exception as e:
+                print('')
+                print("UNKNOWN EXCEPTION")
+                print(e)
+                print("Backing off for 30 seconds.")
+                time.sleep(30)
+                continue
+
+            messages.extend(response['messages'])
+
+            if response['has_more'] is True:
+                last_timestamp = messages[-1]['ts']  # -1 means last element in a list
+            else:
+                break
+
+        return messages
