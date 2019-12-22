@@ -3,7 +3,7 @@ import json
 import redis
 import datetime
 
-r = redis.from_url(os.environ.get("REDIS_URL"))
+r = redis.from_url(os.environ.get("REDIS_URL"), decode_responses=True)
 
 from django.shortcuts import render
 from django.http import HttpResponse, HttpResponseRedirect

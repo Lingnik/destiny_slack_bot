@@ -148,7 +148,7 @@ class Hawthorne:
                 return
 
         # Authenticate with Redis
-        my_redis = redis.from_url(redis_url)
+        my_redis = redis.from_url(redis_url, decode_responses=True)
 
         # Start the bot.
         bot = Hawthorne(
@@ -464,10 +464,10 @@ class Hawthorne:
         if not self.redis.llen('slash.list'):
             return False
 
-        queued_cmd = str(self.redis.rpop('slash.list'))
+        queued_cmd = self.redis.rpop('slash.list')
         channel_id, user_id = queued_cmd.split(',')
 
-        self.log(":information_source: Listing player activities for {slack_id} on behalf of {user_id}...")
+        self.log(f":information_source: Listing player activities on behalf of {user_id} in {channel_id}...")
         messages = []
         players_activities = self.get_players_activities(is_cache_run=True)
         for activity in players_activities:
