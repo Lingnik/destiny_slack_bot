@@ -486,9 +486,15 @@ class Hawthorne:
         if active_character is not None:
             activity_name = ""
             activity = self.bungie_manifest_activity_definitions[str(activity)]
-            activity_name += activity["displayProperties"]["name"]
+            if not activity["displayProperties"].get("name"):
+                activity_str = pp.pformat(activity)
+                self.log_local(f"Error in activity data, missing 'name': {activity_str}")
+            activity_name += activity["displayProperties"].get("name", "Unknown")
             try:
                 activity_mode = self.bungie_manifest_activity_mode_definitions[str(activity_mode)]
+                if not activity_mode["displayProperties"].get("name"):
+                    activity_str = pp.pformat(activity_mode)
+                    self.log_local(f"Error in activity mode data, missing 'name': {activity_str}")
                 activity_name = "{} - {}".format(activity_mode["displayProperties"]["name"], activity_name)
             except:
                 pass
