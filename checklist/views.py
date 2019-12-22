@@ -107,7 +107,7 @@ def bot_slash_command(request):
     if command == 'list':
         # /hawthorne list
         bot = Hawthorne.instantiate_from_environment()
-        message = bot.list_player_activities(channel_id, user_id)
+        message = bot.list_player_activities()
         return HttpResponse(message)
     return HttpResponse(
         ("I couldn't understand your command. Try `/hawthorne help`.\n"
