@@ -86,6 +86,89 @@ class Hawthorne:
         self.status_thread_ts = None
         self.status_log_thread_ts = None
 
+    @staticmethod
+    def instantiate_from_environment():
+        """Instantiate a Hawthorne() from environment variables.
+
+            :return: 
+            """
+        # Fetch environment variables.
+        slack_api_token = required_environment_variable('SLACK_API_TOKEN')
+        slack_api_bot_token = required_environment_variable('SLACK_API_BOT_TOKEN')
+        slack_incoming_webhook_url = required_environment_variable('SLACK_INCOMING_WEBHOOK_URL')
+        slack_oauth_client_id = required_environment_variable('SLACK_OAUTH_CLIENT_ID')
+        slack_oauth_client_secret = required_environment_variable('SLACK_OAUTH_CLIENT_SECRET')
+        slack_oauth_token = optional_environment_variable('SLACK_OAUTH_TOKEN')
+        slack_channel_hawthorne = required_environment_variable('SLACK_CHANNEL_HAWTHORNE')
+        slack_channel_for_staging_with_real_users = optional_environment_variable(
+            'SLACK_CHANNEL_FOR_STAGING_WITH_REAL_USERS')
+        slack_channel_log = required_environment_variable('SLACK_CHANNEL_LOG')
+        slack_bot_user_id = required_environment_variable('SLACK_BOT_USER_ID')
+        bungie_api_token = required_environment_variable('BUNGIE_API_TOKEN')
+        bungie_oauth_token = optional_environment_variable('BUNGIE_OAUTH_TOKEN')
+        if bungie_oauth_token:
+            bungie_oauth_token = json.loads(bungie_oauth_token)
+        redis_url = required_environment_variable('REDIS_URL')
+
+        # Fetch command-line arguments.
+        # ---
+
+        # Authenticate with Slack
+        oauth_scope = ['users.profile:read']
+        if not slack_oauth_token:
+            slack = SlackApi(oauth_client_id=slack_oauth_client_id,
+                             oauth_client_secret=slack_oauth_client_secret,
+                             oauth_scope=oauth_scope,
+                             oauth_user_token=slack_api_token,
+                             oauth_bot_token=slack_api_bot_token,
+                             incoming_webhook_url=slack_incoming_webhook_url)
+            print(slack.start_auth())
+            code = input('Enter the code provided by Slack: ')
+            slack.finish_auth(code)
+        else:
+            slack = SlackApi(oauth_user_token=slack_oauth_token, incoming_webhook_url=slack_incoming_webhook_url)
+            slack.auth(slack_oauth_token, slack_api_bot_token)
+
+        # Authenticate with Bungie
+        if not bungie_oauth_token:
+            print('No oauth token in BUNGIE_OAUTH_TOKEN, so fetching a new one.')
+            bungie_oauth_token = cli_bungie_auth(bungie_api_token)
+        bungie = BungieApi(bungie_api_token, bungie_oauth_token)
+        print("Verifying Bungie API connection.")
+        try:
+            if not bungie.is_authenticated(validate=True):
+                print("Unable to proceed, not authenticated with valid credentials.")
+                return
+        except Exception as e:
+            print("Exception encountered when authenticating - fetching new credentials.")
+            bungie_oauth_token = cli_bungie_auth(bungie_api_token)
+            bungie = BungieApi(bungie_api_token, bungie_oauth_token)
+            if not bungie.is_authenticated(validate=True):
+                print("Unable to proceed, not authenticated with valid credentials.")
+                return
+
+        # Authenticate with Redis
+        my_redis = redis.from_url(redis_url)
+
+        # Start the bot.
+        bot = Hawthorne(
+            slack_api_token,
+            slack_incoming_webhook_url,
+            slack_oauth_client_id,
+            slack_oauth_client_secret,
+            slack_oauth_token,
+            bungie_api_token,
+            bungie_oauth_token,
+            slack_channel_hawthorne,
+            slack_channel_log,
+            slack_bot_user_id,
+            slack,
+            bungie,
+            my_redis,
+            slack_channel_for_staging_with_real_users=slack_channel_for_staging_with_real_users
+        )
+        return bot
+
     """
     TICKER LOOP
     """
@@ -366,6 +449,23 @@ class Hawthorne:
             msg = self.activity_message_for(activity)
             self.announce(msg)
             self.log_local(f":information_source: {cache_key}: {new_activity_hash}")
+
+    def list_player_activities(self):
+        """List current player activities by request.
+        
+        :return: 
+        """
+        self.log(":information_source: Listing player activities for {slack_id}...")
+        messages = []
+        players_activities = self.get_players_activities(is_cache_run=True)
+        for activity in players_activities:
+            if activity['active_character'] is None:
+                continue
+            messages.append(self.activity_message_for(activity))
+        messages = '\n'.join(messages)
+        message = f":wave: Here's what folk are currently doing:\n{messages}"
+        return message
+
 
     """
     HELPER METHODS
@@ -654,84 +754,10 @@ def optional_environment_variable(varname, default=None):
     envvar_value = os.environ.get(varname, default)
     return envvar_value
 
+def start_hawthorne():
+    """CLI entrypoint. Instantiates and starts Hawthorne."""
 
-def command_line_main():
-    """CLI entrypoint. Instantiates the Hawthorne daemon."""
-
-    # Fetch environment variables.
-    slack_api_token = required_environment_variable('SLACK_API_TOKEN')
-    slack_api_bot_token = required_environment_variable('SLACK_API_BOT_TOKEN')
-    slack_incoming_webhook_url = required_environment_variable('SLACK_INCOMING_WEBHOOK_URL')
-    slack_oauth_client_id = required_environment_variable('SLACK_OAUTH_CLIENT_ID')
-    slack_oauth_client_secret = required_environment_variable('SLACK_OAUTH_CLIENT_SECRET')
-    slack_oauth_token = optional_environment_variable('SLACK_OAUTH_TOKEN')
-    slack_channel_hawthorne = required_environment_variable('SLACK_CHANNEL_HAWTHORNE')
-    slack_channel_for_staging_with_real_users = optional_environment_variable('SLACK_CHANNEL_FOR_STAGING_WITH_REAL_USERS')
-    slack_channel_log = required_environment_variable('SLACK_CHANNEL_LOG')
-    slack_bot_user_id = required_environment_variable('SLACK_BOT_USER_ID')
-    bungie_api_token = required_environment_variable('BUNGIE_API_TOKEN')
-    bungie_oauth_token = optional_environment_variable('BUNGIE_OAUTH_TOKEN')
-    if bungie_oauth_token:
-        bungie_oauth_token = json.loads(bungie_oauth_token)
-    redis_url = required_environment_variable('REDIS_URL')
-
-    # Fetch command-line arguments.
-    # ---
-
-    # Authenticate with Slack
-    oauth_scope = ['users.profile:read']
-    if not slack_oauth_token:
-        slack = SlackApi(oauth_client_id=slack_oauth_client_id,
-                         oauth_client_secret=slack_oauth_client_secret,
-                         oauth_scope=oauth_scope,
-                         oauth_user_token=slack_api_token,
-                         oauth_bot_token=slack_api_bot_token,
-                         incoming_webhook_url=slack_incoming_webhook_url)
-        print(slack.start_auth())
-        code = input('Enter the code provided by Slack: ')
-        slack.finish_auth(code)
-    else:
-        slack = SlackApi(oauth_user_token=slack_oauth_token, incoming_webhook_url=slack_incoming_webhook_url)
-        slack.auth(slack_oauth_token, slack_api_bot_token)
-
-    # Authenticate with Bungie
-    if not bungie_oauth_token:
-        print('No oauth token in BUNGIE_OAUTH_TOKEN, so fetching a new one.')
-        bungie_oauth_token = cli_bungie_auth(bungie_api_token)
-    bungie = BungieApi(bungie_api_token, bungie_oauth_token)
-    print("Verifying Bungie API connection.")
-    try:
-        if not bungie.is_authenticated(validate=True):
-            print("Unable to proceed, not authenticated with valid credentials.")
-            return
-    except Exception as e:
-        print("Exception encountered when authenticating - fetching new credentials.")
-        bungie_oauth_token = cli_bungie_auth(bungie_api_token)
-        bungie = BungieApi(bungie_api_token, bungie_oauth_token)
-        if not bungie.is_authenticated(validate=True):
-            print("Unable to proceed, not authenticated with valid credentials.")
-            return
-
-    # Authenticate with Redis
-    my_redis = redis.from_url(redis_url)
-
-    # Start the bot.
-    bot = Hawthorne(
-        slack_api_token,
-        slack_incoming_webhook_url,
-        slack_oauth_client_id,
-        slack_oauth_client_secret,
-        slack_oauth_token,
-        bungie_api_token,
-        bungie_oauth_token,
-        slack_channel_hawthorne,
-        slack_channel_log,
-        slack_bot_user_id,
-        slack,
-        bungie,
-        my_redis,
-        slack_channel_for_staging_with_real_users=slack_channel_for_staging_with_real_users
-    )
+    bot = Hawthorne.instantiate_from_environment()
     signal.signal(signal.SIGTERM, receive_signal)
     print("Starting Hawthorne.")
     bot.start()
@@ -756,4 +782,4 @@ def receive_signal(signal_number, frame):
     return
 
 if __name__ == "__main__":
-    command_line_main()
+    start_hawthorne()

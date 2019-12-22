@@ -12,5 +12,6 @@ The command you're using now lets you customize the things I'll do for you (or n
 • `/hawthorne help` - This message.
 • `/hawthorne hide 2h` - Prevents me from sharing your activity in #hawthorne for the specified time. (Time is expressed in hours, e.g. `3h`.)
 • `/hawthorne unhide` - Cancels your request to prevent me from sharing your activity in #hawthorne.
+• `/hawthorne list` - View the current activities of (visible) players in #hawthorne.
 
 That's all I can help with for now. If you have other feedback, please let <@U5KLLJB6K> know!

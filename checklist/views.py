@@ -11,6 +11,7 @@ from django.template import loader
 from django.views.decorators.csrf import csrf_exempt
 
 from bungie_wrapper import BungieApi
+from hawthorne import Hawthorne
 from utilities import logger
 
 
@@ -63,7 +64,7 @@ def oauth_callback(request):
 
 @csrf_exempt
 def bot_slash_command(request):
-    """
+    """Handle Slack /hawthorne commands.
     
     :param request: 
     :return: 
@@ -77,6 +78,7 @@ def bot_slash_command(request):
     print(f"<@{user_id}> ran a command in <#{channel_id}>: /hawthorne {command}")
 
     if command == 'help':
+        # /hawthorne help
         template = loader.get_template('checklist/bot_slash_help.txt')
         context = {
             'response_url': response_url,
@@ -85,9 +87,11 @@ def bot_slash_command(request):
         }
         return HttpResponse(template.render(context, request))
     if command == 'unmute':
+        # /hawthorne unmute
         r.delete(f'mute.{user_id}')
         return HttpResponse('Your status will appear in #hawthorne again.')
     if command.startswith('mute '):
+        # /hawthorne mute 1h
         hours = command.split(' ')[1]
         hours = hours.strip('h')
         try:
@@ -100,6 +104,11 @@ def bot_slash_command(request):
         timestamp = datetime.datetime.now().timestamp() + (hours * 60.0 * 60.0)
         r.set(f'mute.{user_id}', timestamp)
         return HttpResponse(f'I will hide your activity for {hours} hours.')
+    if command == 'list':
+        # /hawthorne list
+        bot = Hawthorne.instantiate_from_environment()
+        message = bot.list_player_activities(channel_id, user_id)
+        return HttpResponse(message)
     return HttpResponse(
         ("I couldn't understand your command. Try `/hawthorne help`.\n"
          f"Your command: `/hawthorne {command}`"))
