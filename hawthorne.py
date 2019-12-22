@@ -172,10 +172,8 @@ class Hawthorne:
                                 response_data = json.loads(e.response.text)
                                 if response_data.get('ErrorStatus') == 'SystemDisabled':
                                     if self.status_thread_ts:
-                                        self.log_thread(self.status_log_thread_ts,
-                                                        f'Maintenance message: `{e.response.text}`')
-                                        self.log_thread(self.status_thread_ts,
-                                                        'Bungie.net is still down for maintenance. Will check again in 5 minutes.')
+                                        self.log_thread(self.status_log_thread_ts, f'Maintenance message: `{e.response.text}`')
+                                        self.log_thread(self.status_thread_ts, 'Bungie.net is still down for maintenance. Will check again in 5 minutes.')
                                         self.back_pressure = MAINTENANCE_SLEEP_TIME
                                         break
                                     self.status_log_thread_ts = self.log(f'Maintenance message: `{e.response.text}`')
@@ -318,12 +316,12 @@ class Hawthorne:
             tmp_uid = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']} {activity['slack_member']['slack_id']}"
             cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
             if activity['active_character'] is None:
-                self.log(f":information_source: _Cache:_ No activity for {tmp_uid}")
+                self.log_local(f":information_source: _Cache:_ No activity for {tmp_uid}")
                 # self.player_activity_cache[cache_key] = None
                 continue
 
             msg = self.activity_message_for(activity)
-            self.log(f":information_source: _Cache:_ Activity for {tmp_uid}: {activity['activity']['hash']} `{msg}`")
+            self.log_local(f":information_source: _Cache:_ Activity for {tmp_uid}: {activity['activity']['hash']} `{msg}`")
             cache_val = activity["activity"]["hash"]
             self.player_activity_cache[cache_key] = [cache_val]
         self.log(':information_source: *Caching complete*')
@@ -367,7 +365,7 @@ class Hawthorne:
             # Announce the activity.
             msg = self.activity_message_for(activity)
             self.announce(msg)
-            self.log(f":information_source: {cache_key}: {new_activity_hash}")
+            self.log_local(f":information_source: {cache_key}: {new_activity_hash}")
 
     """
     HELPER METHODS
