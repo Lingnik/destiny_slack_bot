@@ -69,7 +69,6 @@ def bot_slash_command(request):
     :param request: 
     :return: 
     """
-    bot = Hawthorne.instantiate_from_environment()
     response_url = str(request.POST.get('response_url'))
     channel_id = str(request.POST.get('channel_id'))
     user_id = str(request.POST.get('user_id'))
@@ -90,7 +89,6 @@ def bot_slash_command(request):
     if command == 'unmute':
         # /hawthorne unmute
         r.delete(f'mute.{user_id}')
-        bot.log(f"{user_id} unmuted.")
         return HttpResponse('Your status will appear in #hawthorne again.')
     if command.startswith('mute '):
         # /hawthorne mute 1h
@@ -105,12 +103,11 @@ def bot_slash_command(request):
             ))
         timestamp = datetime.datetime.now().timestamp() + (hours * 60.0 * 60.0)
         r.set(f'mute.{user_id}', timestamp)
-        bot.log(f"{user_id} muted for {hours}h.")
         return HttpResponse(f'I will hide your activity for {hours} hours.')
     if command == 'list':
         # /hawthorne list
-        message = bot.list_player_activities()
-        return HttpResponse(message)
+        r.lpush('slash.list', f'{channel_id},{user_id}')
+        return HttpResponse(":wave: Hang on a sec, I'll fetch player activities and get back to you.")
     return HttpResponse(
         ("I couldn't understand your command. Try `/hawthorne help`.\n"
          f"Your command: `/hawthorne {command}`"))

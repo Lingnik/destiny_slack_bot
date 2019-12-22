@@ -200,12 +200,15 @@ class Hawthorne:
 
             # Register actions that the loop will tick against.
             action_registry = [
+                {'method': self.slash_list, 'frequency': 1, 'last': 0, 'wait': 0, 'calls-api': True},
                 {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0, 'calls-api': False},
                 {'method': self.cache_bungie_manifests, 'frequency': 86400, 'last': 0, 'wait': 0, 'calls-api': True},
                 {'method': self.cache_player_activities, 'frequency': None, 'last': 0, 'wait': 0, 'calls-api': True},
                 {'method': self.report_player_activity, 'frequency': 30, 'last': 0, 'wait': 0, 'calls-api': True},
                 {'method': self.dump_slack_history, 'frequency': 86400, 'last': 0, 'wait': 86400, 'calls-api': False},
             ]
+            for i, action in enumerate(action_registry):
+                action_registry[i]['seq'] = i
             # Enqueue future things that we're waiting on by setting their 'last' to the future.
             for i, action in enumerate(action_registry):
                 wait = action['wait']
@@ -229,7 +232,8 @@ class Hawthorne:
                 self.debug('TICK')
 
                 # Try to find an action to call, call it, then break as soon as we call one action.
-                for i, action in enumerate(action_registry):
+                sorted_registry = sorted(action_registry, key=lambda x: (x['last'], x['seq']))
+                for i, action in enumerate(sorted_registry):
                     now = datetime.datetime.now(datetime.timezone.utc).timestamp()
                     last = action['last']
                     frequency = action['frequency']
@@ -274,7 +278,7 @@ class Hawthorne:
                                 ts = self.log(f":warning: Exception occurred when ticking on {action_call_name}: `{e}`")
                                 self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
                                 break
-                        action_registry[i]['last'] = now
+                        action_registry[action['seq']]['last'] = now
                         break
 
                 # END TICK
@@ -452,12 +456,18 @@ class Hawthorne:
             self.announce(msg)
             self.log_local(f":information_source: {cache_key}: {new_activity_hash}")
 
-    def list_player_activities(self):
+    def slash_list(self):
         """List current player activities by request.
         
         :return: 
         """
-        self.log(":information_source: Listing player activities for {slack_id}...")
+        if not self.redis.llen('slash.list'):
+            return False
+
+        queued_cmd = str(self.redis.rpop('slash.list'))
+        channel_id, user_id = queued_cmd.split(',')
+
+        self.log(":information_source: Listing player activities for {slack_id} on behalf of {user_id}...")
         messages = []
         players_activities = self.get_players_activities(is_cache_run=True)
         for activity in players_activities:
@@ -465,8 +475,13 @@ class Hawthorne:
                 continue
             messages.append(self.activity_message_for(activity))
         messages = '\n'.join(messages)
-        message = f":wave: Here's what folk are currently doing:\n{messages}"
-        return message
+        message = f"Here's what folk are currently doing:\n{messages}"
+        self.slack.slack_as_bot.chat_postEphemeral(
+            channel=channel_id,
+            user=user_id,
+            text=message,
+            parse='mrkdwn'
+        )
 
 
     """
