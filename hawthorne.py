@@ -200,9 +200,9 @@ class Hawthorne:
 
             # Register actions that the loop will tick against.
             action_registry = [
-                {'method': self.slash_list, 'frequency': 1, 'last': 0, 'wait': 0, 'calls-api': True},
                 {'method': self.heartbeat, 'frequency': 300, 'last': 0, 'wait': 0, 'calls-api': False},
                 {'method': self.cache_bungie_manifests, 'frequency': 86400, 'last': 0, 'wait': 0, 'calls-api': True},
+                {'method': self.slash_list, 'frequency': 1, 'last': 0, 'wait': 0, 'calls-api': True},
                 {'method': self.cache_player_activities, 'frequency': None, 'last': 0, 'wait': 0, 'calls-api': True},
                 {'method': self.report_player_activity, 'frequency': 30, 'last': 0, 'wait': 0, 'calls-api': True},
                 {'method': self.dump_slack_history, 'frequency': 86400, 'last': 0, 'wait': 86400, 'calls-api': False},
@@ -595,7 +595,7 @@ class Hawthorne:
         player, player_name, membership_type, membership_id = self.get_membership_for_slack_user(slack_user)
 
         # Get the "current" activity for the player and hydrate that with additional context.
-        activity, activity_mode, active_character, activity_timestamp = self.bungie.get_current_activity(
+        activity, activity_mode, active_character, activity_timestamp, character_data = self.bungie.get_current_activity(
             membership_type, membership_id)
         activity_name = None
         character = None
@@ -605,7 +605,9 @@ class Hawthorne:
             activity = self.bungie_manifest_activity_definitions[str(activity)]
             if not activity["displayProperties"].get("name"):
                 activity_str = pp.pformat(activity)
-                self.log_local(f"Error in activity data, missing 'name': {activity_str}")
+                del character_data['availableActivities']
+                character_str = pp.pformat(character_data)
+                self.log_local(f"Error in activity data, missing 'name': {activity_str}\n{character_str}")
             activity_name += activity["displayProperties"].get("name", "Unknown")
             try:
                 activity_mode = self.bungie_manifest_activity_mode_definitions[str(activity_mode)]

@@ -499,13 +499,19 @@ class BungieApi:
         activity_mode_hash = None
         active_character = None
         activity_start_time = 0
+        character_activity = None
         for key in characters:
             tmp_activity_hash = characters[key]['currentActivityHash']
             tmp_activity_mode_hash = characters[key]['currentActivityModeHash']
             tmp_activity_start_time = characters[key].get('dateActivityStarted', '1980-01-01T01:01:01Z')
             tmp_activity_start_time = datetime.datetime.strptime(tmp_activity_start_time, '%Y-%m-%dT%H:%M:%S%z')
             tmp_activity_start_time = tmp_activity_start_time.timestamp()
-            if tmp_activity_hash in (0, 82913930, 3903562779) and tmp_activity_mode_hash in (0, 2166136261, 1589650888):
+            if ((tmp_activity_hash == 0 and tmp_activity_mode_hash == 0) or
+                (tmp_activity_hash == 82913930 and tmp_activity_mode_hash == 2166136261) or  # Orbit
+                (tmp_activity_hash == 3903562779 and tmp_activity_mode_hash == 1589650888) or  # Tower
+                (tmp_activity_hash == 1048645278 and tmp_activity_mode_hash == 1686739444)  # Orbit
+            ):
+                # if tmp_activity_hash in (0, 82913930, 3903562779) and tmp_activity_mode_hash in (0, 2166136261, 1589650888):
                 # Skip Orbit because it's erroneous and Tower because it tends to get stuck
                 continue
             else:
@@ -518,9 +524,10 @@ class BungieApi:
                     activity_mode_hash = tmp_activity_mode_hash
                     activity_start_time = tmp_activity_start_time
                     active_character = key
+                    character_activity = characters[active_character]
                 continue
 
-        return activity_hash, activity_mode_hash, active_character, activity_start_time
+        return activity_hash, activity_mode_hash, active_character, activity_start_time, character_activity
 
 
     def get_clan_last_on(self, clan_id):
