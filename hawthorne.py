@@ -43,6 +43,9 @@ pp = pprint.PrettyPrinter(indent=4)
 class Hawthorne:
     """@Hawthorne, the Destiny 2 Slack bot."""
 
+
+    # region INITIALIZERS
+
     def __init__(
             self,
             slack_api_token,
@@ -55,9 +58,9 @@ class Hawthorne:
             slack_channel_hawthorne,
             slack_channel_log,
             slack_bot_user_id,
-            slack,
-            bungie,
-            redis,
+            slack_wrapper,
+            bungie_wrapper,
+            redis_wrapper,
             slack_channel_for_staging_with_real_users=None
     ):
         self.slack_api_token = slack_api_token
@@ -71,9 +74,9 @@ class Hawthorne:
         self.slack_channel_for_staging_with_real_users = slack_channel_for_staging_with_real_users
         self.slack_channel_log = slack_channel_log
         self.slack_bot_user_id = slack_bot_user_id
-        self.slack = slack  # type: SlackApi
-        self.bungie = bungie  # type: BungieApi
-        self.redis = redis
+        self.slack = slack_wrapper  # type: SlackApi
+        self.bungie = bungie_wrapper  # type: BungieApi
+        self.redis = redis_wrapper  # type: redis.Redis
 
         self.unable_to_find_users_squelch = {}
         self.slack_seen_cache = {}
@@ -171,9 +174,10 @@ class Hawthorne:
             bot.cache_bungie_manifests()
         return bot
 
-    """
-    TICKER LOOP
-    """
+    # endregion
+
+
+    # region TICKER LOOP
 
     def stop(self):
         """Send the instruction to stop the bot after the current tick completes.
@@ -288,9 +292,10 @@ class Hawthorne:
             ts = self.log(f":big-red-siren: Exception occurred: `{e}`")
             self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
 
-    """
-    LOGGERS
-    """
+    # endregion
+
+
+    # region LOGGERS
 
     def announce(self, message):
         """Announce a message to the default Slack channel as the bot user.
@@ -345,9 +350,10 @@ class Hawthorne:
             now = datetime.datetime.now(datetime.timezone.utc)
             print(f"{now} DEBUG: {message}")
 
-    """
-    TICKER METHODS
-    """
+    # endregion
+
+
+    # region TICKER METHODS
 
     def back_off_if_needed(self):
         """Check whether we have received backpressure from the API and wait a bit.
@@ -398,7 +404,7 @@ class Hawthorne:
 
         :return: 
         """
-        self.log(":information_source: *Pre-caching player activities...*")
+        self.log(":information_source: Pre-caching player activities...")
         self.player_activity_cache = {}
         players_activities = self.get_players_activities(is_cache_run=True)
         for activity in players_activities:
@@ -413,7 +419,7 @@ class Hawthorne:
             self.log_local(f":information_source: _Cache:_ Activity for {tmp_uid}: {activity['activity']['hash']} `{msg}`")
             cache_val = activity["activity"]["hash"]
             self.player_activity_cache[cache_key] = [cache_val]
-        self.log(':information_source: *Caching complete*')
+        self.log(':information_source: Caching complete')
 
     def report_player_activity(self):
         """Report on player activity.
@@ -483,10 +489,23 @@ class Hawthorne:
             parse='mrkdwn'
         )
 
+    # endregion
 
-    """
-    HELPER METHODS
-    """
+
+    # region CUSTOM EXCEPTIONS
+
+    class SlackUserHasNoGamerTags(Exception):
+        """An exception that conveys a Slack member has no gamertags in their user profile."""
+        pass
+
+    class SlackUserHasNoCharacters(Exception):
+        """An exception that conveys a Slack member has no gamertags that could be found on their platform(s)."""
+        pass
+
+    # endregion
+
+
+    # region HELPER METHODS
 
     def first_seen(self, slack_id, slack_name, msg):
         """Onboard a user when they first join the channel.
@@ -551,14 +570,6 @@ class Hawthorne:
                 continue
 
         return players_activities
-
-    class SlackUserHasNoGamerTags(Exception):
-        """An exception that conveys a Slack member has no gamertags in their user profile."""
-        pass
-
-    class SlackUserHasNoCharacters(Exception):
-        """An exception that conveys a Slack member has no gamertags that could be found on their platform(s)."""
-        pass
 
     def get_membership_for_slack_user(self, slack_user):
         """Get a Bungie.net membership for a given Slack user. 
@@ -675,31 +686,9 @@ class Hawthorne:
             emoji = ':fireteam:'
         return emoji
 
-    def activity_message_for(self, activity):
-        """Return a Slack-formatted message (raw, not blocks) representing the current activity.
-        
-        :param activity: 
-        :return: 
-        """
-        slack_display_name = activity["slack_member"]["slack_display_name"]
-        destiny_player_name = activity["destiny_player_name"]
-        character_class = activity["destiny_character_class"]
-        if character_class:
-            character_class_emoji = character_class['emoji']
-        else:
-            character_class_emoji = ""
-        activity_name = activity["activity_name"]
-        activity_emoji = self.activity_emoji_for(activity_name)
-        if not slack_display_name:
-            display_name = f'*{destiny_player_name}*'
-        else:
-            display_name = f'*{destiny_player_name}* (@{slack_display_name})'
-
-        return f':hawthorne: {display_name} {character_class_emoji} is now playing {activity_emoji} *{activity_name}*'
-
     def fetch_slack_channel_members(self, slack_channel_id):
         """Fetch all the Slack members for a channel and their various Destiny usernames.
-        
+
         :param slack_channel_id: 
         :return: 
         """
@@ -731,10 +720,39 @@ class Hawthorne:
                 self.debug(f"{member.data['profile'].get('display_name', None)} does not have valid gamertag fields.")
         return channel_members
 
+    def activity_message_for(self, activity):
+        """Return a Slack-formatted message (raw, not blocks) representing the current activity.
+        
+        :param activity: 
+        :return: 
+        """
+        slack_display_name = activity["slack_member"]["slack_display_name"]
+        destiny_player_name = activity["destiny_player_name"]
+        character_class = activity["destiny_character_class"]
+        if character_class:
+            character_class_emoji = character_class['emoji']
+        else:
+            character_class_emoji = ""
+        activity_name = activity["activity_name"]
+        activity_emoji = self.activity_emoji_for(activity_name)
+        if not slack_display_name:
+            display_name = f'*{destiny_player_name}*'
+        else:
+            display_name = f'*{destiny_player_name}* (@{slack_display_name})'
+        if activity.get("is_changed"):
+            delta_emoji = ":rocket:"
+        else:
+            delta_emoji = ":repeat:"
 
-"""
-COMMAND LINE HANDLER
-"""
+        msg = f'{delta_emoji} {character_class_emoji} {display_name} is playing {activity_emoji} *{activity_name}*'
+
+        return msg
+
+    pass
+    # endregion
+
+
+# region COMMAND LINE HANDLER
 
 def cli_bungie_auth(api_token):
     """Mimic an oauth flow to get the user an API token."""
@@ -782,7 +800,6 @@ def start_hawthorne():
     bot.start()
     print("Hawthorne has stopped.")
 
-
 def receive_signal(signal_number, frame):
     """Receive UNIX process signals so we can handle Heroku's SIGTERM and shut down gracefully.
     
@@ -799,6 +816,8 @@ def receive_signal(signal_number, frame):
         print(f"Signal received: {signal_number}")
 
     return
+
+# endregion
 
 if __name__ == "__main__":
     start_hawthorne()
