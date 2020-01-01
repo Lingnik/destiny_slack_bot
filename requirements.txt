@@ -5,3 +5,4 @@ django-heroku
 slacker
 slackclient
 redis
+humanize

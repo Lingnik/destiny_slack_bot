@@ -12,6 +12,7 @@ import traceback
 
 import redis
 import requests
+import humanize
 
 from slack_wrapper import SlackApi
 from bungie_wrapper import BungieApi, Non200ResponseException
@@ -35,6 +36,19 @@ CLASSES = {
     '671679327': {'name': 'Hunter', 'emoji': ':hunter:'}
 }
 
+"""Activities that should not be reported at all."""
+ACTIVITY_BLACKLIST = [
+    (0, 0),
+    (82913930, 2166136261),  # Orbit
+    #(3903562779, 1589650888),  # Tower
+    (1048645278, 1686739444)  # Orbit
+]
+
+"""Activities that should not be reported when they appear repeatedly back-to-back."""
+ACTIVITY_DUPE_BLACKLIST = [
+    1019949956  # Forges
+]
+
 MAINTENANCE_SLEEP_TIME = 300
 SIGTERM_RECEIVED = False
 pp = pprint.PrettyPrinter(indent=4)
@@ -42,6 +56,9 @@ pp = pprint.PrettyPrinter(indent=4)
 
 class Hawthorne:
     """@Hawthorne, the Destiny 2 Slack bot."""
+
+
+    # region INITIALIZERS
 
     def __init__(
             self,
@@ -55,9 +72,9 @@ class Hawthorne:
             slack_channel_hawthorne,
             slack_channel_log,
             slack_bot_user_id,
-            slack,
-            bungie,
-            redis,
+            slack_wrapper,
+            bungie_wrapper,
+            redis_wrapper,
             slack_channel_for_staging_with_real_users=None
     ):
         self.slack_api_token = slack_api_token
@@ -71,16 +88,15 @@ class Hawthorne:
         self.slack_channel_for_staging_with_real_users = slack_channel_for_staging_with_real_users
         self.slack_channel_log = slack_channel_log
         self.slack_bot_user_id = slack_bot_user_id
-        self.slack = slack  # type: SlackApi
-        self.bungie = bungie  # type: BungieApi
-        self.redis = redis
+        self.slack = slack_wrapper  # type: SlackApi
+        self.bungie = bungie_wrapper  # type: BungieApi
+        self.redis = redis_wrapper  # type: redis.Redis
 
         self.unable_to_find_users_squelch = {}
         self.slack_seen_cache = {}
         self.bungie_manifest = None
         self.bungie_manifest_activity_definitions = None
         self.bungie_manifest_activity_mode_definitions = None
-        self.player_activity_cache = None  # type: dict
         self.keep_running = False
         self.back_pressure = None
         self.status_thread_ts = None
@@ -171,9 +187,10 @@ class Hawthorne:
             bot.cache_bungie_manifests()
         return bot
 
-    """
-    TICKER LOOP
-    """
+    # endregion
+
+
+    # region TICKER LOOP
 
     def stop(self):
         """Send the instruction to stop the bot after the current tick completes.
@@ -288,9 +305,10 @@ class Hawthorne:
             ts = self.log(f":big-red-siren: Exception occurred: `{e}`")
             self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
 
-    """
-    LOGGERS
-    """
+    # endregion
+
+
+    # region LOGGERS
 
     def announce(self, message):
         """Announce a message to the default Slack channel as the bot user.
@@ -345,9 +363,10 @@ class Hawthorne:
             now = datetime.datetime.now(datetime.timezone.utc)
             print(f"{now} DEBUG: {message}")
 
-    """
-    TICKER METHODS
-    """
+    # endregion
+
+
+    # region TICKER METHODS
 
     def back_off_if_needed(self):
         """Check whether we have received backpressure from the API and wait a bit.
@@ -398,63 +417,117 @@ class Hawthorne:
 
         :return: 
         """
-        self.log(":information_source: *Pre-caching player activities...*")
-        self.player_activity_cache = {}
-        players_activities = self.get_players_activities(is_cache_run=True)
-        for activity in players_activities:
-            tmp_uid = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']} {activity['slack_member']['slack_id']}"
-            cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
-            if activity['active_character'] is None:
-                self.log_local(f":information_source: _Cache:_ No activity for {tmp_uid}")
-                # self.player_activity_cache[cache_key] = None
-                continue
+        self.log(":information_source: Pre-caching player activities...")
+        self.report_player_activity(cache_only=True)
+        self.log(':information_source: Caching complete')
 
-            msg = self.activity_message_for(activity)
-            self.log_local(f":information_source: _Cache:_ Activity for {tmp_uid}: {activity['activity']['hash']} `{msg}`")
-            cache_val = activity["activity"]["hash"]
-            self.player_activity_cache[cache_key] = [cache_val]
-        self.log(':information_source: *Caching complete*')
-
-    def report_player_activity(self):
+    def report_player_activity(self, cache_only=False):
         """Report on player activity.
 
         :return: 
         """
         self.debug('report_player_activity()')
-        players_activities = self.get_players_activities()
+        players_activities = self.get_players_activities(is_cache_run=cache_only)
         for activity in players_activities:
-            slack_id = activity['slack_member']['slack_id']
-            slack_name = activity['slack_member']['slack_display_name']
-            msg = ("Your in-game activities will be shared in this channel."
-                   " Check out the instructions pinned in the sidebar.")
-            self.first_seen(slack_id, slack_name, msg)
-
-            if activity['active_character'] is None:
-                self.debug(f"{slack_id} {slack_name}: No activity.")
-                continue
-
-            cache_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
-            new_activity_hash = activity['activity']['hash']
-
-            # Fetch and update the cache.
-            seen_activities = self.player_activity_cache.get(cache_key)
-            if seen_activities is not None and isinstance(seen_activities, list):
-                seen_activities = seen_activities.copy()
-                if len(seen_activities) > 10:  # Only cache up to 10 recent activity hashes.
-                    del self.player_activity_cache[cache_key][0]
+            if isinstance(activity, self.SlackIsNotProperlySetUpException):
+                slack_id = activity.context['slack_user']['slack_id']
+                slack_display_name = activity.context['slack_user']['slack_display_name']
             else:
-                self.player_activity_cache[cache_key] = []
-            self.player_activity_cache[cache_key].append(new_activity_hash)  # Update the cache.
+                slack_id = activity['slack_member']['slack_id']
+                slack_display_name = activity['slack_member']['slack_display_name']
 
-            # If the activity is in the cache, skip announcing.
-            if isinstance(seen_activities, list) and new_activity_hash in seen_activities:
-                self.debug(f"{activity['slack_member']['slack_display_name']}: Seen activity: {new_activity_hash}")
+            if not cache_only:
+                # Send an appropriate message to users on first contact.
+                if isinstance(activity, self.SlackUserHasNoCharacters):
+                    if not self.unable_to_find_users_squelch.get(slack_id):
+                        self.log(f":warning: Unable to find characters for member: {slack_id} {slack_display_name}")
+                    self.unable_to_find_users_squelch[slack_id] = True
+                    msg = (
+                        "You have some gamer tags in your user profile, but I wasn't able to locate any characters"
+                        " for your gamer tags, and your activity won't be shown until that's the case."
+                        " Check out the instructions pinned in the sidebar."
+                    )
+                elif isinstance(activity, self.SlackUserHasNoGamerTags):
+                    if not self.unable_to_find_users_squelch.get(slack_id):
+                        self.log(f":warning: Player is a member of channel, but has no gamer tags: {slack_id} {slack_display_name}")
+                    self.unable_to_find_users_squelch[slack_id] = True
+                    msg = (
+                        "You currently do not have any gamer tags in your user profile, and your activity won't be shown"
+                        " until that's the case. Check out the instructions pinned in the sidebar."
+                    )
+                else:
+                    msg = (
+                        "Your in-game activities will be shared in this channel."
+                        " Check out the instructions pinned in the sidebar."
+                    )
+                self.first_seen(slack_id, slack_display_name, msg)
+
+            # Skip doing anything else for users that don't have Slack set up correctly.
+            if isinstance(activity, self.SlackIsNotProperlySetUpException):
                 continue
 
-            # Announce the activity.
-            msg = self.activity_message_for(activity)
-            self.announce(msg)
-            self.log_local(f":information_source: {cache_key}: {new_activity_hash}")
+            # Handle the case where there is no activity for any of the player's characters.
+            active_character = activity['active_character']
+            if active_character is None:
+                self.debug(f"{slack_id} {slack_display_name}: No activity.")
+                continue
+
+            new_activity_hash = activity['activity_context']['currentActivityHash']
+            new_activity_mode_hash = activity['activity_context']['currentActivityModeHash']
+            new_activity_ts = activity['activity_context']['epochActivityStarted']
+
+            # We use Redis to cache past activities to ensure we aren't too noisy. Redis needs some keys.
+            membership_type = activity['destiny_membership_type']
+            membership_id = activity['destiny_membership_id']
+            #membership_activities_list_key = f"activities!{membership_type}!{membership_id}"
+            activity_instance_key = f"activity!{membership_type}!{membership_id}!{active_character}!{new_activity_hash}!{new_activity_ts}"
+            membership_latest_activity_key = f"latest_activity!{membership_type}!{membership_id}"
+
+            # Skip activities that have already been seen and, for some reason, are being seen again
+            if self.redis.exists(activity_instance_key):
+                self.debug(f"{slack_id} {slack_display_name}: SEEN: {activity_instance_key}")
+                continue
+            # Skip activities that are older than the most recently seen activity.
+            membership_latest_activity = self.redis.get(f"{membership_latest_activity_key}!ts")
+            if membership_latest_activity and new_activity_ts < float(membership_latest_activity):
+                self.debug(f"{slack_id} {slack_display_name}: Activity older than most recent: {activity_instance_key}")
+                continue
+
+            #day = str(datetime.datetime.utcfromtimestamp(new_activity_ts).isoformat()[0:11])
+            #activity_day_bucket = f"activity-bucket!{day}"
+            #activity_day_membership_bucket = f"activity-bucket!{day}!{membership_type}!{membership_id}"
+
+            # Update the cache.
+            old_activity_hash = self.redis.get(f"{membership_latest_activity_key}!activity")
+            old_activity_char = self.redis.get(f"{membership_latest_activity_key}!active_character")
+            self.redis.set(f"{membership_latest_activity_key}!ts", new_activity_ts)
+            self.redis.set(f"{membership_latest_activity_key}!activity", new_activity_hash)
+            self.redis.set(f"{membership_latest_activity_key}!active_character", active_character)
+            self.redis.set(f"{membership_latest_activity_key}!activity_json", json.dumps(activity))
+            #self.redis.lpush(membership_activities_list_key, activity_instance_key, ex=datetime.timedelta(days=30))
+            self.redis.set(activity_instance_key, 1, ex=datetime.timedelta(days=30))
+
+            # Finally, announce the activity (if we need to).
+            if not cache_only:
+                # Skip reporting activities that we aren't interested in.
+                if self._activity_is_blacklisted(new_activity_hash, new_activity_mode_hash):
+                    self.debug(f"SKIP reporting uninteresting activity: {activity_instance_key}")
+                    continue
+
+                # Skip reporting duplicate activities that don't need to be reported.
+                for blacklist_activity_hash in ACTIVITY_DUPE_BLACKLIST:
+                    if (new_activity_hash == blacklist_activity_hash and
+                            new_activity_hash == old_activity_hash and
+                            active_character == old_activity_char
+                        ):
+                        self.debug(f"SKIP reporting duplicate activity: {activity_instance_key}")
+                        continue
+
+                # Announce the activity.
+                msg = self.activity_message_for(activity)
+                self.announce(msg)
+                membership_key = f"{activity['destiny_membership_type']}-{activity['destiny_membership_id']}"
+                self.log_local(f":information_source: {membership_key}: {new_activity_hash}")
 
     def slash_list(self):
         """List current player activities by request.
@@ -469,11 +542,23 @@ class Hawthorne:
 
         self.log(f":information_source: Listing player activities on behalf of {user_id} in {channel_id}...")
         messages = []
-        players_activities = self.get_players_activities(is_cache_run=True)
+        players_activities = self.get_players_activities(is_cache_run=True, fetch_from_cache=True)
+        players_activities = sorted(
+            players_activities,
+            key=lambda x: float(x.get("activity_context", {}).get("epochActivityStarted", 0)) if isinstance(x, dict) else 0
+        )
         for activity in players_activities:
-            if activity['active_character'] is None:
+            try:
+                if activity['active_character'] is None:
+                    continue
+            except Exception as e:
+                exc = traceback.format_exc()
+                ts = self.log(f":warning: Exception occurred in slash_list(): `{e}`")
+                self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
                 continue
-            messages.append(self.activity_message_for(activity))
+            if self._activity_is_blacklisted(activity['activity'], activity['activity_mode']):
+                continue
+            messages.append(self.activity_message_for(activity, include_start=True))
         messages = '\n'.join(messages)
         message = f"Here's what folk are currently doing:\n{messages}"
         self.slack.slack_as_bot.chat_postEphemeral(
@@ -483,10 +568,37 @@ class Hawthorne:
             parse='mrkdwn'
         )
 
+    # endregion
 
-    """
-    HELPER METHODS
-    """
+
+    # region CUSTOM EXCEPTIONS
+
+    class SlackIsNotProperlySetUpException(Exception):
+        """An exception that conveys a Slack member's user profile is not set up properly."""
+        def __init__(self, message, context: dict = None):
+            super().__init__(message)
+            self.context = context
+
+    class SlackUserHasNoGamerTags(SlackIsNotProperlySetUpException):
+        """An exception that conveys a Slack member has no gamertags in their user profile."""
+        def __init__(self, message="Slack User Has No Gamer Tags", context: dict = None):
+            super().__init__(message, context)
+
+    class SlackUserHasNoCharacters(SlackIsNotProperlySetUpException):
+        """An exception that conveys a Slack member has no gamertags that could be found on their platform(s)."""
+        def __init__(self, message="Slack User Has No Gamer Tags", context: dict = None):
+            super().__init__(message, context)
+
+    # endregion
+
+
+    # region HELPER METHODS
+
+    @staticmethod
+    def _activity_is_blacklisted(new_activity_hash, new_activity_mode_hash):
+        for blacklist_activity_hash, blacklist_activity_mode_hash in ACTIVITY_BLACKLIST:
+            if new_activity_hash == blacklist_activity_hash and new_activity_mode_hash == blacklist_activity_mode_hash:
+                return True
 
     def first_seen(self, slack_id, slack_name, msg):
         """Onboard a user when they first join the channel.
@@ -496,23 +608,29 @@ class Hawthorne:
         :param msg: 
         :return: 
         """
-        slack_channel = self.slack_channel_hawthorne
-        message = f":hawthorne: :wave: Welcome to <#{slack_channel}>, <@{slack_id}>! {msg}"
         if not self.slack_seen_cache.get(slack_id):
+            slack_channel = self.slack_channel_hawthorne
+            message = f":hawthorne: :wave: Welcome to <#{slack_channel}>, <@{slack_id}>! {msg}"
             self.log(f":wave: First seen: {slack_id} {slack_name}")
-            self.slack.slack_as_bot.chat_postEphemeral(
-                channel=slack_channel,
-                user=slack_id,
-                text=message,
-                parse='mrkdwn'
-            )
+            try:
+                self.slack.slack_as_bot.chat_postEphemeral(
+                    channel=slack_channel,
+                    user=slack_id,
+                    text=message,
+                    parse='mrkdwn'
+                )
+            except Exception as e:
+                exc = traceback.format_exc()
+                ts = self.log(f":warning: Exception occurred in first_seen(): `{e}`")
+                self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
             self.slack_seen_cache[slack_id] = True
 
-    def get_players_activities(self, is_cache_run=False):
+    def get_players_activities(self, is_cache_run=False, fetch_from_cache=False):
         """Get a list of players (dicts) of a channel and their most recent activity.
         
         :return: 
         """
+        self.debug(f'get_players_activities({is_cache_run=}')
         players_activities = []
         slack_channel = self.slack_channel_hawthorne
         if self.slack_channel_for_staging_with_real_users:
@@ -525,40 +643,15 @@ class Hawthorne:
             if is_cache_run:
                 self.slack_seen_cache[slack_id] = True
             try:
-                activity = self.get_activity_for_slack_user(member)
+                activity = self.get_activity_for_slack_user(member, fetch_from_cache=fetch_from_cache)
                 players_activities.append(activity)
                 self.unable_to_find_users_squelch[slack_id] = False
-
-            except self.SlackUserHasNoGamerTags:
-                if not self.unable_to_find_users_squelch.get(slack_id):
-                    self.log(f":warning: Player is a member of channel, but has no gamer tags: {slack_name}")
-                self.unable_to_find_users_squelch[slack_id] = True
-                if not is_cache_run:
-                    msg = ("You currently do not have any gamer tags in your user profile, and your activity won't be shown"
-                           " until that's the case. Check out the instructions pinned in the sidebar.")
-                    self.first_seen(slack_id, slack_name, msg)
-                continue
-
-            except self.SlackUserHasNoCharacters:
-                if not self.unable_to_find_users_squelch.get(member['slack_id']):
-                    self.log(f":warning: Unable to find characters for member: {member['slack_id']} {member['slack_display_name']}")
-                self.unable_to_find_users_squelch[member['slack_id']] = True
-                if not is_cache_run:
-                    msg = ("You have some gamer tags in your user profile, but I wasn't able to locate any characters"
-                           " for your gamer tags, and your activity won't be shown until that's the case."
-                           " Check out the instructions pinned in the sidebar.")
-                    self.first_seen(slack_id, slack_name, msg)
-                continue
+            except self.SlackUserHasNoGamerTags as e:
+                players_activities.append(e)
+            except self.SlackUserHasNoCharacters as e:
+                players_activities.append(e)
 
         return players_activities
-
-    class SlackUserHasNoGamerTags(Exception):
-        """An exception that conveys a Slack member has no gamertags in their user profile."""
-        pass
-
-    class SlackUserHasNoCharacters(Exception):
-        """An exception that conveys a Slack member has no gamertags that could be found on their platform(s)."""
-        pass
 
     def get_membership_for_slack_user(self, slack_user):
         """Get a Bungie.net membership for a given Slack user. 
@@ -566,6 +659,7 @@ class Hawthorne:
         :param slack_user: 
         :return: 
         """
+        self.debug(f'get_membership_for_slack_user({slack_user=})')
         # Ask for the user by gamertag and fetch their Bungie.net profile.
         if 'destiny_psn_id' in slack_user and slack_user['destiny_psn_id']:
             player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_PSN,
@@ -577,36 +671,69 @@ class Hawthorne:
             player = self.bungie.search_d2_player(membership_type=MEMBERSHIP_TYPE_XBOX,
                                                   display_name=slack_user['destiny_xbl_id'])
         else:
-            raise self.SlackUserHasNoGamerTags()
+            raise self.SlackUserHasNoGamerTags(context={'slack_user': slack_user})
         if len(player) == 0:
-            raise self.SlackUserHasNoCharacters()
+            raise self.SlackUserHasNoCharacters(context={'slack_user': slack_user})
         player_name = player[0]['displayName']
         membership_type = player[0]['membershipType']
         membership_id = player[0]['membershipId']
 
         return player, player_name, membership_type, membership_id
 
-    def get_activity_for_slack_user(self, slack_user):
+    def get_activity_for_slack_user(self, slack_user, fetch_from_cache=False):
         """Get the latest activity for a Slack user based on their user profile gamertags.
         
         :param slack_user: dict
+        :param fetch_from_cache: 
         :return: 
         """
+        self.debug(f'get_activity_for_slack_user({slack_user=}')
         player, player_name, membership_type, membership_id = self.get_membership_for_slack_user(slack_user)
 
+        if fetch_from_cache:
+            membership_latest_activity_key = f"latest_activity!{membership_type}!{membership_id}!activity_json"
+            latest_activity = self.redis.get(membership_latest_activity_key)
+            try:
+                latest_activity = json.loads(str(latest_activity))
+            except Exception as e:
+                exc = traceback.format_exc()
+                ts = self.log(f":warning: Exception occurred in get_activity_for_slack_user(): `{e}`")
+                self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
+            return latest_activity
+
         # Get the "current" activity for the player and hydrate that with additional context.
-        activity, activity_mode, active_character, activity_timestamp, character_data = self.bungie.get_current_activity(
-            membership_type, membership_id)
+        character_activities = self.bungie.get_current_activity(membership_type, membership_id)
+        most_recent_activity = None
+        for character_id in character_activities['characterActivities']:
+            character_key = f'{membership_type}-{membership_id}-{character_id}'
+            tmp_activity_hash = character_activities['characterActivities'][character_id]['currentActivityHash']
+            tmp_activity_mode_hash = character_activities['characterActivities'][character_id]['currentActivityModeHash']
+
+            # Find the character with the most recent activity by epoch:
+            tmp_activity_epoch = character_activities['characterActivities'][character_id]['epochActivityStarted']
+            tmp_char_activity_key = f'activity.{character_key}.{tmp_activity_hash}.{tmp_activity_mode_hash}'
+            if not most_recent_activity or tmp_activity_epoch > most_recent_activity['epochActivityStarted']:
+                most_recent_activity = character_activities['characterActivities'][character_id]
+
+        activity = most_recent_activity['currentActivityHash']
+        activity_mode = most_recent_activity['currentActivityModeHash']
+        active_character = most_recent_activity['characterId']
+
+        most_recent_activity_blacklisted = False
+        for blacklist_activity_hash, blacklist_activity_mode_hash in ACTIVITY_BLACKLIST:
+            if (activity == blacklist_activity_hash and
+                activity_mode == blacklist_activity_mode_hash):
+                most_recent_activity_blacklisted = True
+
         activity_name = None
         character = None
         character_class = None
-        if active_character is not None:
+        if active_character is not None and not most_recent_activity_blacklisted:
             activity_name = ""
             activity = self.bungie_manifest_activity_definitions[str(activity)]
             if not activity["displayProperties"].get("name"):
                 activity_str = pp.pformat(activity)
-                del character_data['availableActivities']
-                character_str = pp.pformat(character_data)
+                character_str = pp.pformat(character_activities['characterActivities'])
                 self.log_local(f"Error in activity data, missing 'name': {activity_str}\n{character_str}")
             activity_name += activity["displayProperties"].get("name", "Unknown")
             try:
@@ -635,7 +762,9 @@ class Hawthorne:
             'activity': activity,
             'activity_mode': activity_mode,
             'active_character': active_character,
-            'activity_name': activity_name
+            'activity_name': activity_name,
+            'transitory_data': character_activities.get('transitoryData'),
+            'activity_context': most_recent_activity
         }
         return return_activity
 
@@ -675,34 +804,13 @@ class Hawthorne:
             emoji = ':fireteam:'
         return emoji
 
-    def activity_message_for(self, activity):
-        """Return a Slack-formatted message (raw, not blocks) representing the current activity.
-        
-        :param activity: 
-        :return: 
-        """
-        slack_display_name = activity["slack_member"]["slack_display_name"]
-        destiny_player_name = activity["destiny_player_name"]
-        character_class = activity["destiny_character_class"]
-        if character_class:
-            character_class_emoji = character_class['emoji']
-        else:
-            character_class_emoji = ""
-        activity_name = activity["activity_name"]
-        activity_emoji = self.activity_emoji_for(activity_name)
-        if not slack_display_name:
-            display_name = f'*{destiny_player_name}*'
-        else:
-            display_name = f'*{destiny_player_name}* (@{slack_display_name})'
-
-        return f':hawthorne: {display_name} {character_class_emoji} is now playing {activity_emoji} *{activity_name}*'
-
     def fetch_slack_channel_members(self, slack_channel_id):
         """Fetch all the Slack members for a channel and their various Destiny usernames.
-        
+
         :param slack_channel_id: 
         :return: 
         """
+        self.debug(f'fetch_slack_channel_members({slack_channel_id=})')
         channel_members = []
         raw_members = self.slack.slack_as_user.channels_info(channel=slack_channel_id).data['channel'].get(
             'members')
@@ -718,23 +826,60 @@ class Hawthorne:
             member = self.slack.slack_as_user.users_profile_get(user=member_id)
             if 'bot_id' in member['profile']:
                 continue
-            if 'fields' in member.data['profile'] and isinstance(member.data['profile']['fields'], dict):
-                record = {
-                    'slack_id': member_id,
-                    'slack_display_name': member.data['profile'].get('display_name', None),
-                    'destiny_psn_id': member.data['profile'].get('fields', {}).get(SLACK_FIELD_PSN, {}).get('value', None),
-                    'destiny_xbl_id': member.data['profile'].get('fields', {}).get(SLACK_FIELD_XBL, {}).get('value', None),
-                    'destiny_stm_id': member.data['profile'].get('fields', {}).get(SLACK_FIELD_STM, {}).get('value', None)
-                }
-                channel_members.append(record)
-            else:
-                self.debug(f"{member.data['profile'].get('display_name', None)} does not have valid gamertag fields.")
+            member_fields = member.data.get('profile', {}).get('fields', {}) or {}
+            slack_display_name = member.data.get('profile', {}).get('display_name', None)
+            if not slack_display_name or slack_display_name == '':
+                slack_display_name = member.data.get('profile', {}).get('real_name', None)
+            record = {
+                'slack_id': member_id,
+                'slack_display_name': slack_display_name,
+                'destiny_psn_id': member_fields.get(SLACK_FIELD_PSN, {}).get('value', None),
+                'destiny_xbl_id': member_fields.get(SLACK_FIELD_XBL, {}).get('value', None),
+                'destiny_stm_id': member_fields.get(SLACK_FIELD_STM, {}).get('value', None)
+            }
+            channel_members.append(record)
         return channel_members
 
+    def activity_message_for(self, activity, include_start=False):
+        """Return a Slack-formatted message (raw, not blocks) representing the current activity.
+        
+        :param activity: 
+        :param include_start:
+        :return: 
+        """
+        slack_display_name = activity["slack_member"]["slack_display_name"]
+        destiny_player_name = activity["destiny_player_name"]
+        character_class = activity["destiny_character_class"]
+        if character_class:
+            character_class_emoji = character_class['emoji']
+        else:
+            character_class_emoji = ""
+        activity_name = activity["activity_name"]
+        if not activity_name:
+            activity_name = 'Unknown'
+        activity_emoji = self.activity_emoji_for(activity_name)
+        if not slack_display_name:
+            display_name = f'*{destiny_player_name}*'
+        else:
+            display_name = f'*{destiny_player_name}* (@{slack_display_name})'
 
-"""
-COMMAND LINE HANDLER
-"""
+        if include_start:
+            now = datetime.datetime.now(datetime.timezone.utc)
+            date_activity_started = activity["activity_context"]["epochActivityStarted"]
+            delta = now.timestamp() - date_activity_started
+            delta = datetime.timedelta(seconds=delta)
+            delta_human = humanize.naturaltime(delta)
+            msg = f'{character_class_emoji} {display_name} started playing {activity_emoji} *{activity_name}* _{delta_human}_'
+        else:
+            msg = f'{character_class_emoji} {display_name} is playing {activity_emoji} *{activity_name}*'
+
+        return msg
+
+    pass
+    # endregion
+
+
+# region COMMAND LINE HANDLER
 
 def cli_bungie_auth(api_token):
     """Mimic an oauth flow to get the user an API token."""
@@ -782,7 +927,6 @@ def start_hawthorne():
     bot.start()
     print("Hawthorne has stopped.")
 
-
 def receive_signal(signal_number, frame):
     """Receive UNIX process signals so we can handle Heroku's SIGTERM and shut down gracefully.
     
@@ -799,6 +943,8 @@ def receive_signal(signal_number, frame):
         print(f"Signal received: {signal_number}")
 
     return
+
+# endregion
 
 if __name__ == "__main__":
     start_hawthorne()
