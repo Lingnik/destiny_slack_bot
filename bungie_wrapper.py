@@ -44,8 +44,12 @@ Example usage:
 import requests
 import os
 import datetime
+import pprint
 
 from utilities import logger
+
+
+pp = pprint.PrettyPrinter(indent=4)
 
 
 class AuthenticationExpiredException(Exception):
@@ -491,43 +495,32 @@ class BungieApi:
         
         :param membership_type: 
         :param membership_id: 
-        :return: three-tuple of activity_hash, activity_mode_hash, active_character or None,None,None if no activity
+        :return: Dict of characters (a dict of activity attributes)
         """
-        activities = self.get_d2_profile(membership_id, membership_type, ['204'])
-        characters = activities['characterActivities']['data']
-        activity_hash = None
-        activity_mode_hash = None
-        active_character = None
-        activity_start_time = 0
-        character_activity = None
+        # Find the activity with the most recent start time, since Bungie sometimes reports old activities
+        # as the current activity on a character that isn't actually logged in. More details:
+        # * https://github.com/Bungie-net/api/issues/1030
+        # * https://github.com/Bungie-net/api/wiki/Affinitization:-benefits,-drawbacks,-how-to
+        activities = self.get_d2_profile(membership_id, membership_type, ['204', '1000'])
+        characters = activities['characterActivities'].get('data', {})
+        transitory_data = activities['profileTransitoryData'].get('data', {})
         for key in characters:
-            tmp_activity_hash = characters[key]['currentActivityHash']
-            tmp_activity_mode_hash = characters[key]['currentActivityModeHash']
+            characters[key].pop('availableActivities', None)
+            characters[key].pop('currentActivityModeType', None)
+            characters[key].pop('currentActivityModeTypes', None)
+            characters[key].pop('lastCompletedStoryHash', None)
             tmp_activity_start_time = characters[key].get('dateActivityStarted', '1980-01-01T01:01:01Z')
             tmp_activity_start_time = datetime.datetime.strptime(tmp_activity_start_time, '%Y-%m-%dT%H:%M:%S%z')
             tmp_activity_start_time = tmp_activity_start_time.timestamp()
-            if ((tmp_activity_hash == 0 and tmp_activity_mode_hash == 0) or
-                (tmp_activity_hash == 82913930 and tmp_activity_mode_hash == 2166136261) or  # Orbit
-                (tmp_activity_hash == 3903562779 and tmp_activity_mode_hash == 1589650888) or  # Tower
-                (tmp_activity_hash == 1048645278 and tmp_activity_mode_hash == 1686739444)  # Orbit
-            ):
-                # if tmp_activity_hash in (0, 82913930, 3903562779) and tmp_activity_mode_hash in (0, 2166136261, 1589650888):
-                # Skip Orbit because it's erroneous and Tower because it tends to get stuck
-                continue
-            else:
-                # Find the activity with the most recent start time, since Bungie sometimes reports old activities
-                # as the current activity on a character that isn't actually logged in. More details:
-                # * https://github.com/Bungie-net/api/issues/1030
-                # * https://github.com/Bungie-net/api/wiki/Affinitization:-benefits,-drawbacks,-how-to
-                if tmp_activity_start_time > activity_start_time:
-                    activity_hash = tmp_activity_hash
-                    activity_mode_hash = tmp_activity_mode_hash
-                    activity_start_time = tmp_activity_start_time
-                    active_character = key
-                    character_activity = characters[active_character]
-                continue
+            characters[key]['epochActivityStarted'] = tmp_activity_start_time
+            characters[key]['characterId'] = key
 
-        return activity_hash, activity_mode_hash, active_character, activity_start_time, character_activity
+        result_dict = {
+            'characterActivities': characters,
+            'transitoryData': transitory_data
+        }
+
+        return result_dict
 
 
     def get_clan_last_on(self, clan_id):
