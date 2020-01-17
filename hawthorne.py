@@ -275,7 +275,14 @@ class Hawthorne:
                                     self.status_log_thread_ts = None
                             except Non200ResponseException as e:
                                 exc = traceback.format_exc()
-                                response_data = json.loads(e.response.text)
+                                try:
+                                    response_data = json.loads(e.response.text)
+                                except json.decoder.JSONDecodeError as e2:
+                                    exc = traceback.format_exc()
+                                    ts = self.log(f":warning: Exception occurred when parsing json: `{e2}`")
+                                    self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
+                                    self.log_thread(ts, e.response.text)
+                                    break
                                 if response_data.get('ErrorStatus') == 'SystemDisabled':
                                     if self.status_thread_ts:
                                         self.log_thread(self.status_log_thread_ts, f'Maintenance message: `{e.response.text}`')
