@@ -214,8 +214,8 @@ class BungieApi:
         token = r.json()
         if persist:
             token['cached'] = True
-            token['expires_at'] = post_succeeded_at + token['expires_in']
-            token['refresh_expires_at'] = post_succeeded_at + token['refresh_expires_in']
+            token['expires_at'] = post_succeeded_at + token.get('expires_in')
+            token['refresh_expires_at'] = post_succeeded_at + token.get('refresh_expires_in')
             self._oauth_token = token
         return token
 
