@@ -13,6 +13,7 @@ import traceback
 import redis
 import requests
 import humanize
+from asyncio import TimeoutError
 
 from slack_wrapper import SlackApi
 from bungie_wrapper import BungieApi, Non200ResponseException
@@ -830,7 +831,10 @@ class Hawthorne:
                     self.redis.delete(f'mute.{member_id}')
                 else:
                     continue
-            member = self.slack.slack_as_user.users_profile_get(user=member_id)
+            try:
+                member = self.slack.slack_as_user.users_profile_get(user=member_id)
+            except TimeoutError as e:
+                self.log(f":warning: asyncio timeout when fetching Slack user profile for: <@{member_id}>`")
             if 'bot_id' in member['profile']:
                 continue
             member_fields = member.data.get('profile', {}).get('fields', {}) or {}
