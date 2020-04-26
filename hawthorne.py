@@ -287,7 +287,7 @@ class Hawthorne:
                                     ts = self.log(f":warning: Exception occurred when parsing json during Non200ResponseException for status code `{e.response.status}`")
                                     self.log_thread(ts, f"```\ne.response.text\n```")
                                     self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
-                                    self.log_thread(ts, f"```\n{e2}}\n```")
+                                    self.log_thread(ts, f"```\n{e2}\n```")
                                     break
                                 if response_data.get('ErrorStatus') == 'SystemDisabled':
                                     if self.status_thread_ts:
