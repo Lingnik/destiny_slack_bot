@@ -279,10 +279,15 @@ class Hawthorne:
                                 try:
                                     response_data = json.loads(e.response.text)
                                 except json.decoder.JSONDecodeError as e2:
+                                    if e.response.status == 503:
+                                        ts = self.log(f":warning: 503 error occurred during {action_call_name}")
+                                        self.log_thread(ts, f"```\n{e.response.text}\n```")
+                                        break
                                     exc = traceback.format_exc()
-                                    ts = self.log(f":warning: Exception occurred when parsing json: `{e2}`")
+                                    ts = self.log(f":warning: Exception occurred when parsing json during Non200ResponseException for status code `{e.response.status}`")
+                                    self.log_thread(ts, f"```\ne.response.text\n```")
                                     self.log_thread(ts, f"Exception:\n```\n{exc}\n```")
-                                    self.log_thread(ts, e.response.text)
+                                    self.log_thread(ts, f"```\n{e2}}\n```")
                                     break
                                 if response_data.get('ErrorStatus') == 'SystemDisabled':
                                     if self.status_thread_ts:
